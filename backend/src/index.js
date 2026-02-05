@@ -43,6 +43,17 @@ app.get('/puestos', (req, res) => {
   });
 });
 
+// Endpoint para obtener lista de todos los guardias
+app.get('/guardias', (req, res) => {
+  db.query('SELECT id_guardia, nombre, apellido, rut, activo FROM guardias', (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Error al obtener guardias' });
+    }
+    res.json(results);
+  });
+});
+
 // Endpoint para actualizar el estado activo del guardia (PATCH)
 app.patch('/guardias/activo', (req, res) => {
   const { rut, activo } = req.body;
@@ -104,6 +115,23 @@ app.get('/guardias/estado', (req, res) => {
     } else {
       res.json({ activo: 0, id_turno: null });
     }
+  });
+});
+
+// Endpoint para obtener detalles de un guardia específico
+app.get('/guardias/:id', (req, res) => {
+  const { id } = req.params;
+  db.query('SELECT * FROM guardias WHERE id_guardia = ?', [id], (err, results) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ error: 'Error al obtener detalles del guardia' });
+    }
+    if (results.length === 0) {
+      return res.status(404).json({ error: 'Guardia no encontrado' });
+    }
+    const guardia = results[0];
+    delete guardia.contrasena; // No enviamos la contraseña por seguridad
+    res.json(guardia);
   });
 });
 
@@ -367,6 +395,32 @@ app.post('/checks', (req, res) => {
       return res.status(500).json({ error: 'Error al registrar check' });
     }
     res.json({ success: true, id_presencia: result.insertId });
+  });
+});
+
+// Endpoint para obtener checks de presencia (Historial)
+app.get('/checks', (req, res) => {
+  const { id_guardia } = req.query;
+  let query = `
+    SELECT cp.*, p.puesto 
+    FROM checks_presencia cp
+    LEFT JOIN puestos p ON cp.id_puesto = p.id_puesto
+  `;
+  const params = [];
+  
+  if (id_guardia) {
+    query += ' WHERE cp.id_guardia = ?';
+    params.push(id_guardia);
+  }
+  
+  query += ' ORDER BY cp.fecha_hora DESC LIMIT 50';
+
+  db.query(query, params, (err, results) => {
+    if (err) {
+      console.error('Error al obtener checks:', err);
+      return res.status(500).json({ error: 'Error al obtener checks' });
+    }
+    res.json(results);
   });
 });
 
@@ -642,23 +696,107 @@ app.post('/panic', async (req, res) => {
   }
 });
 
+// Endpoint para datos del mapa (Ubicación de guardias activos)
+app.get('/dashboard/map-data', async (req, res) => {
+  try {
+    const query = `
+      SELECT g.id_guardia, g.nombre, g.apellido, cp.latitud, cp.longitud, cp.fecha_hora
+      FROM guardias g
+      JOIN (
+          SELECT id_guardia, MAX(id_presencia) as last_id
+          FROM checks_presencia
+          GROUP BY id_guardia
+      ) latest ON g.id_guardia = latest.id_guardia
+      JOIN checks_presencia cp ON latest.last_id = cp.id_presencia
+      WHERE g.activo = 1
+    `;
+    const [guards] = await db.promise().query(query);
+    res.json(guards);
+  } catch (err) {
+    console.error('Error en /dashboard/map-data:', err);
+    res.status(500).json({ error: 'Error al obtener datos del mapa' });
+  }
+});
+
+// Endpoint para últimas alertas (Solo Pánico)
+app.get('/dashboard/alerts', async (req, res) => {
+  try {
+    const [alerts] = await db.promise().query(`
+      SELECT 'PÁNICO' as tipo, a.fecha_hora, g.nombre, g.apellido, 'Alerta de Pánico activada' as descripcion 
+      FROM alertas_panico a 
+      JOIN guardias g ON a.id_guardia = g.id_guardia
+      ORDER BY a.fecha_hora DESC
+      LIMIT 10
+    `);
+    res.json(alerts);
+  } catch (err) {
+    console.error('Error en /dashboard/alerts:', err);
+    res.status(500).json({ error: 'Error al obtener alertas' });
+  }
+});
+
+// Endpoint para obtener todos los eventos (bitácora completa) para el dashboard
+app.get('/dashboard/events', (req, res) => {
+  const query = `
+    SELECT b.*, g.nombre, g.apellido 
+    FROM bitacoras b 
+    JOIN guardias g ON b.id_guardia = g.id_guardia 
+    ORDER BY b.id_bitacora DESC 
+    LIMIT 50
+  `;
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error('Error al obtener eventos:', err);
+      return res.status(500).json({ error: 'Error al obtener eventos' });
+    }
+
+    const events = results.map(row => {
+      let type = 'NOTIFICACION';
+      let description = '';
+      
+      if (row.incidencias) {
+        type = 'INCIDENCIA';
+        description = row.incidencias;
+      } else if (row.observaciones) {
+        type = 'OBSERVACION';
+        description = row.observaciones;
+      } else {
+        description = row.notificaciones;
+      }
+
+      // Intentar obtener fecha de alguna columna probable
+      const dbDate = row.fecha || row.fecha_hora || row.created_at || row.timestamp;
+      const dateObj = dbDate ? new Date(dbDate) : new Date();
+
+      return {
+        id: row.id_bitacora,
+        timestamp: dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: dateObj.toLocaleDateString(),
+        type,
+        description: description || '',
+        author: `${row.nombre} ${row.apellido}`
+      };
+    });
+    res.json(events);
+  });
+});
+
 // Endpoint para estadísticas del dashboard
 app.get('/dashboard/stats', async (req, res) => {
   try {
     // 1. Guardias Activos
     const [guards] = await db.promise().query('SELECT COUNT(*) as count FROM guardias WHERE activo = 1');
     
-    // 2. Alertas de hoy (Pánico + Incidencias en bitácora)
-    // Nota: Si falla, verifica si tu tabla 'alertas_panico' tiene la columna 'fecha_hora' o 'created_at'
+    // 2. Alertas de hoy (Solo Pánico)
     const [panics] = await db.promise().query('SELECT COUNT(*) as count FROM alertas_panico WHERE DATE(fecha_hora) = CURDATE()');
-    const [incidents] = await db.promise().query('SELECT COUNT(*) as count FROM bitacoras WHERE (incidencias IS NOT NULL AND incidencias != "") AND DATE(fecha) = CURDATE()');
     
     // 3. Rondas del día (Completadas vs Total)
     const [rounds] = await db.promise().query('SELECT COUNT(*) as total, SUM(CASE WHEN estado = "COMPLETADA" THEN 1 ELSE 0 END) as completed FROM rondas WHERE fecha = CURDATE()');
 
     res.json({
       activeGuards: guards[0].count,
-      alerts: panics[0].count + incidents[0].count,
+      alerts: panics[0].count,
       roundsCompleted: rounds[0].completed || 0,
       roundsTotal: rounds[0].total || 0
     });
