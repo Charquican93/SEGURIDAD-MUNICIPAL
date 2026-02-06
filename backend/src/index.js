@@ -782,6 +782,46 @@ app.get('/dashboard/events', (req, res) => {
   });
 });
 
+// --- SISTEMA DE MENSAJERÍA ---
+
+// 1. Enviar mensaje (Supervisor -> Guardia)
+app.post('/mensajes', (req, res) => {
+  const { id_guardia, titulo, contenido } = req.body;
+  if (!id_guardia || !titulo || !contenido) {
+    return res.status(400).json({ error: 'Faltan datos del mensaje' });
+  }
+  
+  const query = 'INSERT INTO mensajes (id_guardia, titulo, contenido) VALUES (?, ?, ?)';
+  db.query(query, [id_guardia, titulo, contenido], (err, result) => {
+    if (err) {
+      console.error('Error al enviar mensaje:', err);
+      return res.status(500).json({ error: 'Error al enviar mensaje' });
+    }
+    res.json({ success: true, id_mensaje: result.insertId });
+  });
+});
+
+// 2. Obtener mensajes de un guardia
+app.get('/mensajes', (req, res) => {
+  const { id_guardia } = req.query;
+  // Ordenamos por fecha descendente (más nuevos primero)
+  const query = 'SELECT * FROM mensajes WHERE id_guardia = ? ORDER BY fecha_hora DESC LIMIT 50';
+  db.query(query, [id_guardia], (err, results) => {
+    if (err) return res.status(500).json({ error: 'Error al obtener mensajes' });
+    res.json(results);
+  });
+});
+
+// 3. Marcar mensaje como leído
+app.patch('/mensajes/:id/leido', (req, res) => {
+  const { id } = req.params;
+  db.query('UPDATE mensajes SET leido = 1 WHERE id_mensaje = ?', [id], (err, result) => {
+    if (err) return res.status(500).json({ error: 'Error al actualizar mensaje' });
+    res.json({ success: true });
+  });
+});
+
+
 // Endpoint para estadísticas del dashboard
 app.get('/dashboard/stats', async (req, res) => {
   try {

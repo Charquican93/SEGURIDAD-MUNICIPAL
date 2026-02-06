@@ -24,6 +24,10 @@ const Dashboard: React.FC = () => {
   const [expandedRoundId, setExpandedRoundId] = useState<string | null>(null);
   const [roundPoints, setRoundPoints] = useState<any[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
+  const [messageTitle, setMessageTitle] = useState('');
+  const [messageBody, setMessageBody] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [guardMessages, setGuardMessages] = useState<any[]>([]);
 
   const fetchData = async () => {
     // 1. Cargar estadísticas
@@ -82,15 +86,20 @@ const Dashboard: React.FC = () => {
     setGuardChecks([]); // Limpiar anteriores
     setExpandedRoundId(null); // Resetear ronda expandida
     setRoundPoints([]);
+    setGuardMessages([]); // Limpiar mensajes anteriores
+    setMessageTitle('');
+    setMessageBody('');
     try {
-      const [detailsRes, roundsRes, checksRes] = await Promise.all([
+      const [detailsRes, roundsRes, checksRes, messagesRes] = await Promise.all([
         axios.get(`${API_URL}/guardias/${guard.id_guardia}`),
         axios.get(`${API_URL}/rondas?id_guardia=${guard.id_guardia}`),
-        axios.get(`${API_URL}/checks?id_guardia=${guard.id_guardia}`)
+        axios.get(`${API_URL}/checks?id_guardia=${guard.id_guardia}`),
+        axios.get(`${API_URL}/mensajes?id_guardia=${guard.id_guardia}`)
       ]);
       setSelectedGuard(detailsRes.data);
       setGuardRounds(roundsRes.data);
       setGuardChecks(checksRes.data);
+      setGuardMessages(messagesRes.data);
     } catch (error) {
       console.error('Error fetching guard details:', error);
     }
@@ -137,6 +146,32 @@ const Dashboard: React.FC = () => {
   const closePuestoModal = () => {
     setShowPuestoModal(false);
     setSelectedPuesto(null);
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageTitle.trim() || !messageBody.trim() || !selectedGuard) return;
+    
+    setSendingMessage(true);
+    try {
+      await axios.post(`${API_URL}/mensajes`, {
+        id_guardia: selectedGuard.id_guardia,
+        titulo: messageTitle,
+        contenido: messageBody
+      });
+      alert('Mensaje enviado correctamente');
+      setMessageTitle('');
+      setMessageBody('');
+      
+      // Recargar la lista de mensajes para ver el nuevo
+      const msgsRes = await axios.get(`${API_URL}/mensajes?id_guardia=${selectedGuard.id_guardia}`);
+      setGuardMessages(msgsRes.data);
+
+    } catch (error) {
+      console.error('Error sending message:', error);
+      alert('Error al enviar el mensaje');
+    } finally {
+      setSendingMessage(false);
+    }
   };
 
   return (
@@ -377,6 +412,70 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Sección de Envío de Mensajes */}
+            <div style={{ marginBottom: '25px', background: '#ebf8ff', padding: '20px', borderRadius: '12px', border: '1px solid #bee3f8' }}>
+              <h3 style={{ marginTop: 0, color: '#2b6cb0', marginBottom: '10px' }}>Enviar Mensaje al Guardia</h3>
+              <input 
+                type="text" 
+                placeholder="Asunto / Título"
+                value={messageTitle}
+                onChange={(e) => setMessageTitle(e.target.value)}
+                style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #cbd5e0', boxSizing: 'border-box' }}
+              />
+              <textarea 
+                placeholder="Escribe tu mensaje aquí..."
+                value={messageBody}
+                onChange={(e) => setMessageBody(e.target.value)}
+                style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #cbd5e0', minHeight: '80px', boxSizing: 'border-box', resize: 'vertical' }}
+              />
+              <button 
+                onClick={handleSendMessage}
+                disabled={sendingMessage || !messageTitle || !messageBody}
+                style={{ background: '#3182ce', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', opacity: sendingMessage ? 0.7 : 1 }}
+              >
+                {sendingMessage ? 'Enviando...' : 'Enviar Mensaje'}
+              </button>
+            </div>
+
+            <h3 style={{ color: '#4a5568', marginBottom: '15px' }}>Historial de Mensajes</h3>
+            {guardMessages.length === 0 ? (
+              <p style={{ color: '#718096', fontStyle: 'italic', marginBottom: '25px', background: '#f7fafc', padding: '10px', borderRadius: '8px' }}>
+                No hay mensajes enviados a este guardia.
+              </p>
+            ) : (
+              <div style={{ maxHeight: '200px', overflowY: 'auto', marginBottom: '25px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: '#f7fafc' }}>
+                    <tr>
+                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Fecha</th>
+                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Título</th>
+                      <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {guardMessages.map((msg: any) => (
+                      <tr key={msg.id_mensaje} style={{ borderBottom: '1px solid #edf2f7' }}>
+                        <td style={{ padding: '10px', color: '#4a5568' }}>{new Date(msg.fecha_hora).toLocaleString()}</td>
+                        <td style={{ padding: '10px', color: '#2d3748', fontWeight: '500' }}>{msg.titulo}</td>
+                        <td style={{ padding: '10px', textAlign: 'center' }}>
+                          <span style={{
+                            padding: '2px 8px',
+                            borderRadius: '10px',
+                            fontSize: '0.7rem',
+                            fontWeight: 'bold',
+                            backgroundColor: msg.leido ? '#c6f6d5' : '#feebc8',
+                            color: msg.leido ? '#2f855a' : '#c05621'
+                          }}>
+                            {msg.leido ? 'LEÍDO' : 'NO LEÍDO'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <h3 style={{ color: '#4a5568', marginBottom: '15px' }}>Rondas Asignadas</h3>
             

@@ -30,6 +30,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const [isActive, setIsActive] = useState(user.isActive);
   const [currentTurnId, setCurrentTurnId] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Funciones de carga de datos extraídas para reutilización
   const fetchActiveStatus = async () => {
@@ -49,8 +50,26 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     }
   };
 
+  // Función para contar mensajes no leídos
+  const fetchUnreadMessages = async () => {
+    try {
+      const res = await fetch(`${API_URL}/mensajes?id_guardia=${user.id_guardia}`);
+      if (res.ok) {
+        const msgs = await res.json();
+        const unread = msgs.filter((m: any) => !m.leido).length;
+        setUnreadCount(unread);
+      }
+    } catch (e) {
+      console.log('Error fetching messages:', e);
+    }
+  };
+
   useEffect(() => {
     fetchActiveStatus();
+    fetchUnreadMessages();
+    // Polling de mensajes cada 15 segundos
+    const msgInterval = setInterval(fetchUnreadMessages, 15000);
+    return () => clearInterval(msgInterval);
   }, [user.rut]);
 
   // Función para generar color consistente basado en el nombre
@@ -171,7 +190,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchActiveStatus(), fetchRounds(), fetchLogs()]);
+    await Promise.all([fetchActiveStatus(), fetchRounds(), fetchLogs(), fetchUnreadMessages()]);
     setRefreshing(false);
   };
 
@@ -628,6 +647,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           name: `${user.nombre} ${user.apellido} \n ${puesto ? `${puesto.puesto} - ${puesto.instalaciones}` : 'Sin Puesto'}`,
           avatar: avatarUrl
         }}
+        notificationCount={unreadCount}
         onProfilePress={() => { console.log('Perfil click'); setShowProfileModal(true); }}
         onNotificationsPress={() => navigation.navigate('Notifications' as never)}
       />

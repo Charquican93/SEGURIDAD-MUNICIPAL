@@ -7,10 +7,11 @@ interface HeaderProps {
     user: UserProfile;
     onProfilePress?: () => void;
     onNotificationsPress?: () => void;
+    notificationCount?: number;
     // onLogoutPress removed, now handled in profile modal
 }
 
-const Header: React.FC<HeaderProps> = ({ user, onProfilePress, onNotificationsPress }) => {
+const Header: React.FC<HeaderProps> = ({ user, onProfilePress, onNotificationsPress, notificationCount = 0 }) => {
     return (
         <View className="flex-row items-center justify-between px-4 py-4 bg-green-600 border-b border-green-700">
             <TouchableOpacity onPress={onProfilePress} className="flex-row items-center gap-3">
@@ -29,7 +30,11 @@ const Header: React.FC<HeaderProps> = ({ user, onProfilePress, onNotificationsPr
             <View className="flex-row items-center gap-2">
                 <TouchableOpacity onPress={onNotificationsPress} className="relative p-2 rounded-full bg-white/20">
                     <MaterialIcons name="notifications" size={24} color="white" />
-                    <View className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white" />
+                    {notificationCount > 0 && (
+                        <View className="absolute top-1 right-1 min-w-[16px] h-4 bg-red-500 rounded-full border border-white items-center justify-center px-1">
+                            <Text className="text-[9px] font-bold text-white">{notificationCount > 9 ? '9+' : notificationCount}</Text>
+                        </View>
+                    )}
                 </TouchableOpacity>
             </View>
         </View>
