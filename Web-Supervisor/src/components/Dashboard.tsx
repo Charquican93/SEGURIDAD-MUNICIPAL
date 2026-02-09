@@ -7,8 +7,11 @@ const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({
     activeGuards: 0,
     alerts: 0,
-    roundsCompleted: 0,
-    roundsTotal: 0
+    rounds: {
+      daily: { total: 0, completed: 0 },
+      weekly: { total: 0, completed: 0 },
+      monthly: { total: 0, completed: 0 }
+    }
   });
   const [alerts, setAlerts] = useState<any[]>([]);
   const [puestos, setPuestos] = useState<any[]>([]);
@@ -28,6 +31,10 @@ const Dashboard: React.FC = () => {
   const [messageBody, setMessageBody] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [guardMessages, setGuardMessages] = useState<any[]>([]);
+  const [showRoundsModal, setShowRoundsModal] = useState(false);
+  const [todaysRounds, setTodaysRounds] = useState<any[]>([]);
+  const [guardFilter, setGuardFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [roundsPeriod, setRoundsPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
 
   const fetchData = async () => {
     // 1. Cargar estadísticas
@@ -74,10 +81,6 @@ const Dashboard: React.FC = () => {
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
-
-  const roundProgress = stats.roundsTotal > 0 
-    ? Math.round((stats.roundsCompleted / stats.roundsTotal) * 100) 
-    : 0;
 
   const handleGuardClick = async (guard: any) => {
     setSelectedGuard(guard);
@@ -174,6 +177,28 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleRoundsStatsClick = async () => {
+    setShowRoundsModal(true);
+    setTodaysRounds([]);
+    try {
+      // Mapeamos el periodo seleccionado al parámetro que espera el backend
+      let periodParam = 'hoy';
+      if (roundsPeriod === 'weekly') periodParam = 'semana';
+      if (roundsPeriod === 'monthly') periodParam = 'mes';
+
+      const response = await axios.get(`${API_URL}/rondas?periodo=${periodParam}`);
+      setTodaysRounds(response.data);
+    } catch (error) {
+      console.error('Error fetching todays rounds:', error);
+    }
+  };
+
+  // Calcular porcentaje actual basado en el periodo seleccionado
+  const currentStats = stats.rounds[roundsPeriod] || { total: 0, completed: 0 };
+  const currentProgress = currentStats.total > 0 
+    ? Math.round((currentStats.completed / currentStats.total) * 100) 
+    : 0;
+
   return (
     <Layout title="Panel de Control">
       {/* Puestos (Almohadillas Horizontales) */}
@@ -207,14 +232,60 @@ const Dashboard: React.FC = () => {
 
       {/* Guardias (Almohadillas Horizontales) */}
       <div style={{ marginBottom: '30px' }}>
-        <h3 style={{ marginTop: 0, color: '#4a5568', marginBottom: '15px' }}>Guardias Registrados</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '15px' }}>
+          <h3 style={{ margin: 0, color: '#4a5568' }}>Guardias Registrados</h3>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => setGuardFilter(guardFilter === 'ACTIVE' ? 'ALL' : 'ACTIVE')}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '20px',
+                border: 'none',
+                backgroundColor: guardFilter === 'ACTIVE' ? '#38a169' : '#e2e8f0',
+                color: guardFilter === 'ACTIVE' ? 'white' : '#4a5568',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '0.8rem',
+                transition: 'all 0.2s',
+                outline: 'none'
+              }}
+            >
+              Activos
+            </button>
+            <button
+              onClick={() => setGuardFilter(guardFilter === 'INACTIVE' ? 'ALL' : 'INACTIVE')}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '20px',
+                border: 'none',
+                backgroundColor: guardFilter === 'INACTIVE' ? '#e53e3e' : '#e2e8f0',
+                color: guardFilter === 'INACTIVE' ? 'white' : '#4a5568',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: '0.8rem',
+                transition: 'all 0.2s',
+                outline: 'none'
+              }}
+            >
+              No Activos
+            </button>
+          </div>
+        </div>
         <div style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px' }}>
-          {guardias.length === 0 ? (
+          {guardias.filter((g: any) => {
+            if (guardFilter === 'ACTIVE') return g.activo;
+            if (guardFilter === 'INACTIVE') return !g.activo;
+            return true;
+          }).length === 0 ? (
             <div style={{ padding: '15px', background: 'white', borderRadius: '8px', color: '#718096' }}>
-              No hay guardias registrados.
+              No hay guardias {guardFilter === 'ACTIVE' ? 'activos' : guardFilter === 'INACTIVE' ? 'inactivos' : 'registrados'}.
             </div>
           ) : (
-            guardias.map((guardia: any) => (
+            guardias.filter((g: any) => {
+              if (guardFilter === 'ACTIVE') return g.activo;
+              if (guardFilter === 'INACTIVE') return !g.activo;
+              return true;
+            }).map((guardia: any) => (
               <div key={guardia.id_guardia} onClick={() => handleGuardClick(guardia)} style={{ 
                 minWidth: '200px',
                 background: 'white', 
@@ -254,10 +325,28 @@ const Dashboard: React.FC = () => {
         </div>
 
         {/* Tarjeta de Ejemplo 3 */}
-        <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-          <h3 style={{ marginTop: 0, color: '#4a5568' }}>Rondas Completadas</h3>
-          <p style={{ fontSize: '2rem', fontWeight: 'bold', margin: '10px 0', color: '#38a169' }}>{roundProgress}%</p>
-          <small style={{ color: '#718096' }}>{stats.roundsCompleted} de {stats.roundsTotal} programadas</small>
+        <div 
+          onClick={handleRoundsStatsClick}
+          style={{ 
+            background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+            cursor: 'pointer', transition: 'transform 0.2s'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <h3 style={{ marginTop: 0, color: '#4a5568' }}>Rondas Completadas</h3>
+            <select 
+              onClick={(e) => e.stopPropagation()} 
+              value={roundsPeriod}
+              onChange={(e) => setRoundsPeriod(e.target.value as any)}
+              style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e0', fontSize: '0.8rem', color: '#4a5568', outline: 'none', cursor: 'pointer', background: '#f7fafc' }}
+            >
+              <option value="daily">Hoy</option>
+              <option value="weekly">Semana</option>
+              <option value="monthly">Mes</option>
+            </select>
+          </div>
+          <p style={{ fontSize: '2rem', fontWeight: 'bold', margin: '10px 0', color: '#38a169' }}>{currentProgress}%</p>
+          <small style={{ color: '#718096' }}>{currentStats.completed} de {currentStats.total} programadas</small>
         </div>
 
       </div>
@@ -282,13 +371,34 @@ const Dashboard: React.FC = () => {
                         color: '#c53030',
                         padding: '2px 6px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' 
                       }}>{alert.tipo}</span>
+                      {new Date(alert.fecha_hora).toDateString() === new Date().toDateString() && (
+                        <span style={{ 
+                          backgroundColor: '#e53e3e', 
+                          color: 'white',
+                          padding: '2px 6px', 
+                          borderRadius: '4px', 
+                          fontSize: '0.75rem', 
+                          fontWeight: 'bold',
+                          marginLeft: '8px',
+                          boxShadow: '0 2px 4px rgba(229, 62, 62, 0.4)'
+                        }}>HOY!</span>
+                      )}
                     </td>
                     <td style={{ padding: '10px 0', color: '#2d3748' }}>
-                      <div>{alert.descripcion}</div>
                       <div style={{ fontWeight: 'bold' }}>{alert.nombre} {alert.apellido}</div>
                       <div style={{ fontSize: '0.85rem' }}>{alert.descripcion}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#718096' }}>
-                        {new Date(alert.fecha_hora).toLocaleString()}
+                      <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '15px' }}>
+                        <span>{new Date(alert.fecha_hora).toLocaleString()}</span>
+                        {alert.latitud && alert.longitud && (
+                          <a 
+                            href={`https://www.google.com/maps?q=${alert.latitud},${alert.longitud}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ color: '#e53e3e', fontWeight: 'bold', fontSize: '0.8rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            📍 Ver Ubicación
+                          </a>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -712,8 +822,78 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal de Detalle de Rondas del Día */}
+      {showRoundsModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white', padding: '30px', borderRadius: '12px', width: '90%', maxWidth: '900px',
+            maxHeight: '85vh', overflowY: 'auto', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+          }}>
+            <button 
+              onClick={() => setShowRoundsModal(false)}
+              style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#718096' }}
+            >
+              &times;
+            </button>
+
+            <h2 style={{ marginTop: 0, color: '#2d3748', borderBottom: '1px solid #e2e8f0', paddingBottom: '15px' }}>
+              Detalle de Rondas ({roundsPeriod === 'daily' ? 'Hoy' : roundsPeriod === 'weekly' ? 'Última Semana' : 'Último Mes'})
+            </h2>
+
+            {todaysRounds.length === 0 ? (
+              <p style={{ color: '#718096', fontStyle: 'italic', padding: '20px', textAlign: 'center' }}>
+                No hay rondas registradas para este periodo.
+              </p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+                  <thead>
+                    <tr style={{ background: '#f7fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Hora</th>
+                      <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Ruta</th>
+                      <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Guardia Asignado</th>
+                      <th style={{ padding: '12px', textAlign: 'center', color: '#4a5568' }}>Estado</th>
+                      <th style={{ padding: '12px', textAlign: 'center', color: '#4a5568' }}>Progreso</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todaysRounds.map((ronda: any) => (
+                      <tr key={ronda.id_ronda} style={{ borderBottom: '1px solid #edf2f7' }}>
+                        <td style={{ padding: '12px', color: '#2d3748', fontWeight: 'bold' }}>
+                          {ronda.hora ? ronda.hora.substring(0, 5) : '--:--'}
+                        </td>
+                        <td style={{ padding: '12px', color: '#2d3748' }}>
+                          {ronda.nombre_ruta}
+                        </td>
+                        <td style={{ padding: '12px', color: '#2d3748' }}>
+                          {ronda.nombre_guardia ? `${ronda.nombre_guardia} ${ronda.apellido_guardia}` : <span style={{color: '#cbd5e0'}}>Sin asignar</span>}
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'center' }}>
+                          <span style={{
+                            padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold',
+                            backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
+                            color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
+                          }}>
+                            {ronda.estado}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'center', color: '#4a5568' }}>
+                          {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </Layout>
   );
 };
-
 export default Dashboard;

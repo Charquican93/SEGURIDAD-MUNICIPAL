@@ -558,17 +558,20 @@ app.post('/marcajes', (req, res) => {
 
 // Endpoint para obtener rondas asignadas
 app.get('/rondas', (req, res) => {
-  const { id_guardia, id_puesto } = req.query;
+  const { id_guardia, id_puesto, fecha, periodo, estado } = req.query;
   
   let query = `
     SELECT 
       r.*, 
       ru.nombre as nombre_ruta, 
       ru.descripcion,
+      g.nombre as nombre_guardia,
+      g.apellido as apellido_guardia,
       (SELECT COUNT(*) FROM puntos_control pc WHERE pc.id_ruta = r.id_ruta) as total_puntos,
       (SELECT COUNT(DISTINCT mp.id_punto) FROM marcajes_puntos mp WHERE mp.id_ronda = r.id_ronda) as puntos_marcados
     FROM rondas r
     LEFT JOIN rutas ru ON r.id_ruta = ru.id_ruta
+    LEFT JOIN guardias g ON r.id_guardia = g.id_guardia
   `;
   
   const params = [];
@@ -583,11 +586,33 @@ app.get('/rondas', (req, res) => {
     params.push(id_puesto);
   }
   
+  // Filtros de fecha / periodo
+  if (periodo) {
+    if (periodo === 'hoy') conditions.push('DATE(r.fecha) = CURDATE()');
+    else if (periodo === 'ayer') conditions.push('DATE(r.fecha) = SUBDATE(CURDATE(), 1)');
+    else if (periodo === 'semana') conditions.push('r.fecha >= SUBDATE(CURDATE(), 7)');
+    else if (periodo === 'mes') conditions.push('r.fecha >= SUBDATE(CURDATE(), 30)');
+    // 'todos' no agrega condición
+  } else if (fecha) {
+    if (fecha === 'hoy') {
+      conditions.push('DATE(r.fecha) = CURDATE()');
+    } else {
+      conditions.push('DATE(r.fecha) = ?');
+      params.push(fecha);
+    }
+  }
+
+  // Filtro de estado
+  if (estado && estado !== 'TODAS') {
+    conditions.push('r.estado = ?');
+    params.push(estado);
+  }
+  
   if (conditions.length > 0) {
     query += ' WHERE ' + conditions.join(' AND ');
   }
   
-  query += ' ORDER BY r.hora ASC';
+  query += ' ORDER BY r.fecha DESC, r.hora ASC';
 
   db.query(query, params, (err, results) => {
     if (err) {
@@ -700,7 +725,15 @@ app.post('/panic', async (req, res) => {
 app.get('/dashboard/map-data', async (req, res) => {
   try {
     const query = `
-      SELECT g.id_guardia, g.nombre, g.apellido, cp.latitud, cp.longitud, cp.fecha_hora
+      SELECT 
+        g.id_guardia, 
+        g.nombre, 
+        g.apellido, 
+        cp.latitud, 
+        cp.longitud, 
+        cp.fecha_hora,
+        (SELECT COUNT(*) FROM rondas r WHERE r.id_guardia = g.id_guardia AND DATE(r.fecha) = CURDATE()) as total_rondas,
+        (SELECT COUNT(*) FROM rondas r WHERE r.id_guardia = g.id_guardia AND DATE(r.fecha) = CURDATE() AND r.estado = 'COMPLETADA') as rondas_completadas
       FROM guardias g
       JOIN (
           SELECT id_guardia, MAX(id_presencia) as last_id
@@ -722,7 +755,7 @@ app.get('/dashboard/map-data', async (req, res) => {
 app.get('/dashboard/alerts', async (req, res) => {
   try {
     const [alerts] = await db.promise().query(`
-      SELECT 'PÁNICO' as tipo, a.fecha_hora, g.nombre, g.apellido, 'Alerta de Pánico activada' as descripcion 
+      SELECT 'PÁNICO' as tipo, a.fecha_hora, a.latitud, a.longitud, g.nombre, g.apellido, 'Alerta de Pánico activada' as descripcion 
       FROM alertas_panico a 
       JOIN guardias g ON a.id_guardia = g.id_guardia
       ORDER BY a.fecha_hora DESC
@@ -831,14 +864,36 @@ app.get('/dashboard/stats', async (req, res) => {
     // 2. Alertas de hoy (Solo Pánico)
     const [panics] = await db.promise().query('SELECT COUNT(*) as count FROM alertas_panico WHERE DATE(fecha_hora) = CURDATE()');
     
-    // 3. Rondas del día (Completadas vs Total)
-    const [rounds] = await db.promise().query('SELECT COUNT(*) as total, SUM(CASE WHEN estado = "COMPLETADA" THEN 1 ELSE 0 END) as completed FROM rondas WHERE fecha = CURDATE()');
+    // 3. Rondas (Diario, Semanal, Mensual)
+    const roundsQuery = `
+      SELECT 'daily' as period, COUNT(*) as total, SUM(CASE WHEN estado = "COMPLETADA" THEN 1 ELSE 0 END) as completed FROM rondas WHERE DATE(fecha) = CURDATE()
+      UNION ALL
+      SELECT 'weekly' as period, COUNT(*) as total, SUM(CASE WHEN estado = "COMPLETADA" THEN 1 ELSE 0 END) as completed FROM rondas WHERE fecha >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      UNION ALL
+      SELECT 'monthly' as period, COUNT(*) as total, SUM(CASE WHEN estado = "COMPLETADA" THEN 1 ELSE 0 END) as completed FROM rondas WHERE fecha >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+    `;
+    
+    const [roundsStats] = await db.promise().query(roundsQuery);
+    
+    const roundsData = {
+      daily: { total: 0, completed: 0 },
+      weekly: { total: 0, completed: 0 },
+      monthly: { total: 0, completed: 0 }
+    };
+
+    roundsStats.forEach(row => {
+      if (roundsData[row.period]) {
+        roundsData[row.period] = {
+          total: row.total,
+          completed: Number(row.completed) || 0
+        };
+      }
+    });
 
     res.json({
       activeGuards: guards[0].count,
       alerts: panics[0].count,
-      roundsCompleted: rounds[0].completed || 0,
-      roundsTotal: rounds[0].total || 0
+      rounds: roundsData
     });
   } catch (err) {
     console.error('Error en /dashboard/stats:', err);

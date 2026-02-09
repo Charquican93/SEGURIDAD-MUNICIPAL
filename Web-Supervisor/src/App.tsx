@@ -1,6 +1,9 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
+import History from './components/History';
+import LiveMap from './components/LiveMap';
+
 
 function App() {
   return (
@@ -14,6 +17,12 @@ function App() {
         
         {/* Ruta del Dashboard Real */}
         <Route path="/dashboard" element={<Dashboard />} />
+        
+        {/* Ruta de Historial de Rondas */}
+        <Route path="/historial" element={<History />} />
+
+        {/* Ruta de Mapa en Vivo */}
+        <Route path="/mapa" element={<LiveMap />} />
       </Routes>
     </Router>
   )

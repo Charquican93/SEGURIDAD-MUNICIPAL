@@ -10,6 +10,16 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [user, setUser] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    const session = localStorage.getItem('userSession');
+    if (session) {
+      try {
+        setUser(JSON.parse(session));
+      } catch (e) {}
+    }
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('userSession');
@@ -29,6 +39,48 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
         <div className="sidebar-header">
           Seguridad Municipal
         </div>
+        {user && (
+          <div style={{ 
+            padding: '20px', 
+            borderBottom: '1px solid rgba(255,255,255,0.1)', 
+            marginBottom: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }}>
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              backgroundColor: '#3182ce',
+              color: 'white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 'bold',
+              fontSize: '1rem',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+            }}>
+              {user.nombre?.charAt(0)}{user.apellido?.charAt(0)}
+            </div>
+            <div style={{ overflow: 'hidden' }}>
+              <div style={{ color: '#fff', fontWeight: '600', fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {user.nombre} {user.apellido}
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.8rem' }}>{user.rut}</div>
+              <div style={{ 
+                color: '#63b3ed', 
+                fontSize: '0.7rem', 
+                fontWeight: 'bold', 
+                textTransform: 'uppercase',
+                marginTop: '2px',
+                letterSpacing: '0.5px'
+              }}>
+                Supervisor
+              </div>
+            </div>
+          </div>
+        )}
         <nav className="sidebar-menu">
           {menuItems.map((item) => (
             <div
@@ -59,6 +111,9 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
         <div className="content-body">
           {children}
         </div>
+        <footer style={{ textAlign: 'center', padding: '20px', color: '#718096', fontSize: '0.8rem', marginTop: 'auto', borderTop: '1px solid #e2e8f0' }}>
+          {/*© 2026 CCG - Desarrollado por Leonardo A. Gonzalez C.*/}
+        </footer>
       </main>
     </div>
   );
