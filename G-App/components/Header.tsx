@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, Image, TouchableOpacity } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, Image, TouchableOpacity, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { UserProfile } from '../types';
 
@@ -12,6 +12,30 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ user, onProfilePress, onNotificationsPress, notificationCount = 0 }) => {
+    const scaleAnim = useRef(new Animated.Value(1)).current;
+
+    useEffect(() => {
+        let animation: Animated.CompositeAnimation;
+        if (notificationCount > 0) {
+            animation = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(scaleAnim, {
+                        toValue: 1.3,
+                        duration: 600,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(scaleAnim, {
+                        toValue: 1,
+                        duration: 600,
+                        useNativeDriver: true,
+                    }),
+                ])
+            );
+            animation.start();
+        }
+        return () => animation?.stop();
+    }, [notificationCount]);
+
     return (
         <View className="flex-row items-center justify-between px-4 py-4 bg-green-600 border-b border-green-700">
             <TouchableOpacity onPress={onProfilePress} className="flex-row items-center gap-3">
@@ -29,11 +53,14 @@ const Header: React.FC<HeaderProps> = ({ user, onProfilePress, onNotificationsPr
             </TouchableOpacity>
             <View className="flex-row items-center gap-2">
                 <TouchableOpacity onPress={onNotificationsPress} className="relative p-2 rounded-full bg-white/20">
-                    <MaterialIcons name="notifications" size={24} color="white" />
+                    <MaterialIcons name="chat" size={24} color="white" />
                     {notificationCount > 0 && (
-                        <View className="absolute top-1 right-1 min-w-[16px] h-4 bg-red-500 rounded-full border border-white items-center justify-center px-1">
+                        <Animated.View 
+                            style={{ transform: [{ scale: scaleAnim }] }}
+                            className="absolute top-1 right-1 min-w-[16px] h-4 bg-red-500 rounded-full border border-white items-center justify-center px-1"
+                        >
                             <Text className="text-[9px] font-bold text-white">{notificationCount > 9 ? '9+' : notificationCount}</Text>
-                        </View>
+                        </Animated.View>
                     )}
                 </TouchableOpacity>
             </View>

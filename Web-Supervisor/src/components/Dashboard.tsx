@@ -559,6 +559,7 @@ const Dashboard: React.FC = () => {
                   <thead style={{ position: 'sticky', top: 0, background: '#f7fafc' }}>
                     <tr>
                       <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Fecha</th>
+                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Remitente</th>
                       <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Título</th>
                       <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Estado</th>
                     </tr>
@@ -567,6 +568,13 @@ const Dashboard: React.FC = () => {
                     {guardMessages.map((msg: any) => (
                       <tr key={msg.id_mensaje} style={{ borderBottom: '1px solid #edf2f7' }}>
                         <td style={{ padding: '10px', color: '#4a5568' }}>{new Date(msg.fecha_hora).toLocaleString()}</td>
+                        <td style={{ padding: '10px' }}>
+                          {msg.emisor === 'GUARDIA' ? (
+                            <span style={{ color: '#3182ce', fontWeight: 'bold', fontSize: '0.8rem' }}>📥 GUARDIA</span>
+                          ) : (
+                            <span style={{ color: '#718096', fontWeight: 'bold', fontSize: '0.8rem' }}>📤 SUPERVISOR</span>
+                          )}
+                        </td>
                         <td style={{ padding: '10px', color: '#2d3748', fontWeight: '500' }}>{msg.titulo}</td>
                         <td style={{ padding: '10px', textAlign: 'center' }}>
                           <span style={{

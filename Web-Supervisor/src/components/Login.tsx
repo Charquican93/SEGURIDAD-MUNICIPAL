@@ -65,6 +65,7 @@ const Login: React.FC = () => {
   return (
     <div className="login-container">
       <div className="login-box">
+        <h1 style={{ margin: '0 0 10px 0', color: '#2b6cb0', fontSize: '3rem', textAlign: 'center' }}>Centro de<br/>Control de<br />Guardias</h1>
         <h2>Supervisor de Seguridad</h2>
         <p>Ingrese sus credenciales</p>
         

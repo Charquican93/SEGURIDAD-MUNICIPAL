@@ -30,6 +30,8 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
     { label: 'Panel Principal', path: '/dashboard' },
     { label: 'Guardias en Vivo', path: '/mapa' }, // Futura implementación
     { label: 'Historial de Rondas', path: '/historial' }, // Futura implementación
+    { label: 'Mensajería', path: '/mensajes' },
+    { label: 'Estadísticas', path: '/estadisticas' },
   ];
 
   return (

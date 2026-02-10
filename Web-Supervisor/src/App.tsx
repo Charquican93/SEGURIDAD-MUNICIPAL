@@ -3,6 +3,8 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import History from './components/History';
 import LiveMap from './components/LiveMap';
+import Messages from './components/Messages';
+import Statistics from './components/Statistics';
 
 
 function App() {
@@ -23,6 +25,12 @@ function App() {
 
         {/* Ruta de Mapa en Vivo */}
         <Route path="/mapa" element={<LiveMap />} />
+
+        {/* Ruta de Mensajería */}
+        <Route path="/mensajes" element={<Messages />} />
+
+        {/* Ruta de Estadísticas */}
+        <Route path="/estadisticas" element={<Statistics />} />
       </Routes>
     </Router>
   )

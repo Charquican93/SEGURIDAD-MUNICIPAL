@@ -819,13 +819,19 @@ app.get('/dashboard/events', (req, res) => {
 
 // 1. Enviar mensaje (Supervisor -> Guardia)
 app.post('/mensajes', (req, res) => {
-  const { id_guardia, titulo, contenido } = req.body;
-  if (!id_guardia || !titulo || !contenido) {
+  const { id_guardia, titulo, contenido, emisor } = req.body;
+  
+  // Hacemos el título opcional (por defecto "Mensaje") para estilo chat
+  const tituloFinal = titulo || 'Mensaje';
+
+  if (!id_guardia || !contenido) {
     return res.status(400).json({ error: 'Faltan datos del mensaje' });
   }
   
-  const query = 'INSERT INTO mensajes (id_guardia, titulo, contenido) VALUES (?, ?, ?)';
-  db.query(query, [id_guardia, titulo, contenido], (err, result) => {
+  const sender = emisor || 'SUPERVISOR';
+  
+  const query = 'INSERT INTO mensajes (id_guardia, titulo, contenido, emisor) VALUES (?, ?, ?, ?)';
+  db.query(query, [id_guardia, tituloFinal, contenido, sender], (err, result) => {
     if (err) {
       console.error('Error al enviar mensaje:', err);
       return res.status(500).json({ error: 'Error al enviar mensaje' });
@@ -837,12 +843,27 @@ app.post('/mensajes', (req, res) => {
 // 2. Obtener mensajes de un guardia
 app.get('/mensajes', (req, res) => {
   const { id_guardia } = req.query;
-  // Ordenamos por fecha descendente (más nuevos primero)
-  const query = 'SELECT * FROM mensajes WHERE id_guardia = ? ORDER BY fecha_hora DESC LIMIT 50';
-  db.query(query, [id_guardia], (err, results) => {
-    if (err) return res.status(500).json({ error: 'Error al obtener mensajes' });
-    res.json(results);
-  });
+  
+  if (id_guardia) {
+    // Mensajes de un guardia específico
+    const query = 'SELECT * FROM mensajes WHERE id_guardia = ? ORDER BY fecha_hora DESC LIMIT 50';
+    db.query(query, [id_guardia], (err, results) => {
+      if (err) return res.status(500).json({ error: 'Error al obtener mensajes' });
+      res.json(results);
+    });
+  } else {
+    // Bandeja de entrada (Todos los mensajes recientes para la vista general)
+    const query = `
+      SELECT m.*, g.nombre, g.apellido 
+      FROM mensajes m
+      JOIN guardias g ON m.id_guardia = g.id_guardia
+      ORDER BY m.fecha_hora DESC LIMIT 500
+    `;
+    db.query(query, (err, results) => {
+      if (err) return res.status(500).json({ error: 'Error al obtener mensajes' });
+      res.json(results);
+    });
+  }
 });
 
 // 3. Marcar mensaje como leído
@@ -852,6 +873,72 @@ app.patch('/mensajes/:id/leido', (req, res) => {
     if (err) return res.status(500).json({ error: 'Error al actualizar mensaje' });
     res.json({ success: true });
   });
+});
+
+// Endpoint para analíticas y gráficos
+app.get('/dashboard/analytics', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    // Consultas base
+    let roundsQuery = `
+      SELECT DATE_FORMAT(fecha, '%d/%m') as date, COUNT(*) as total, SUM(CASE WHEN estado = 'COMPLETADA' THEN 1 ELSE 0 END) as completed
+      FROM rondas
+      WHERE 1=1
+    `;
+    let roundsParams = [];
+
+    let eventsQuery = `
+      SELECT 
+        CASE 
+          WHEN incidencias IS NOT NULL AND incidencias != '' THEN 'Incidencia'
+          WHEN observaciones IS NOT NULL AND observaciones != '' THEN 'Observación'
+          ELSE 'Notificación'
+        END as name,
+        COUNT(*) as value
+      FROM bitacoras
+      WHERE 1=1
+    `;
+    let eventsParams = [];
+
+    let topGuardsQuery = `
+      SELECT CONCAT(g.nombre, ' ', LEFT(g.apellido, 1), '.') as name, COUNT(r.id_ronda) as rondas
+      FROM guardias g
+      JOIN rondas r ON g.id_guardia = r.id_guardia
+      WHERE r.estado = 'COMPLETADA'
+    `;
+    let topGuardsParams = [];
+
+    // Aplicar filtros si existen fechas, sino usar valores por defecto
+    if (startDate && endDate) {
+      roundsQuery += ' AND fecha BETWEEN ? AND ?';
+      roundsParams.push(startDate, endDate);
+
+      eventsQuery += ' AND (fecha BETWEEN ? AND ?)';
+      eventsParams.push(startDate, endDate);
+
+      topGuardsQuery += ' AND r.fecha BETWEEN ? AND ?';
+      topGuardsParams.push(startDate, endDate);
+    } else {
+      roundsQuery += ' AND fecha >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)';
+      eventsQuery += ' AND (fecha IS NULL OR fecha >= DATE_SUB(CURDATE(), INTERVAL 30 DAY))';
+      topGuardsQuery += ' AND r.fecha >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+    }
+
+    // Agrupaciones y ordenamiento
+    roundsQuery += ' GROUP BY fecha ORDER BY fecha ASC';
+    eventsQuery += ' GROUP BY name';
+    topGuardsQuery += ' GROUP BY g.id_guardia ORDER BY rondas DESC LIMIT 5';
+
+    const [roundsDaily] = await db.promise().query(roundsQuery, roundsParams);
+    const [events] = await db.promise().query(eventsQuery, eventsParams);
+    const [topGuards] = await db.promise().query(topGuardsQuery, topGuardsParams);
+
+    res.json({ roundsDaily, events, topGuards });
+  } catch (err) {
+    console.error('Error en /dashboard/analytics:', err);
+    res.status(500).json({ error: 'Error al obtener analíticas' });
+  }
 });
 
 

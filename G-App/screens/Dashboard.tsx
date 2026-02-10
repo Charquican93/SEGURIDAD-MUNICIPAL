@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Linking, Alert, Image, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Header from '../components/Header';
@@ -129,6 +129,10 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const [newLogType, setNewLogType] = useState<LogEntry['type']>('NOTIFICACION');
   const [showObservationsModal, setShowObservationsModal] = useState(false);
   const [showPanicSuccessModal, setShowPanicSuccessModal] = useState(false);
+  const [showMessagesModal, setShowMessagesModal] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [replyBody, setReplyBody] = useState('');
+  const scrollViewRef = useRef<ScrollView>(null);
   
   // QR Scanning States
   const [showScanner, setShowScanner] = useState(false);
@@ -192,6 +196,37 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     setRefreshing(true);
     await Promise.all([fetchActiveStatus(), fetchRounds(), fetchLogs(), fetchUnreadMessages()]);
     setRefreshing(false);
+  };
+
+  const fetchMessages = async () => {
+    try {
+      const res = await fetch(`${API_URL}/mensajes?id_guardia=${user.id_guardia}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data.reverse());
+        // Marcar como leídos localmente (opcional, idealmente llamar a API)
+      }
+    } catch (e) {
+      console.log('Error fetching messages:', e);
+    }
+  };
+
+  const handleSendReply = async () => {
+    if (!replyBody.trim()) return;
+    try {
+      await fetch(`${API_URL}/mensajes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_guardia: user.id_guardia,
+          titulo: 'Mensaje',
+          contenido: replyBody,
+          emisor: 'GUARDIA'
+        })
+      });
+      setReplyBody('');
+      fetchMessages(); // Recargar lista
+    } catch(e) { Alert.alert('Error', 'No se pudo enviar el mensaje'); }
   };
 
   // Función auxiliar para guardar en el backend
@@ -649,7 +684,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         }}
         notificationCount={unreadCount}
         onProfilePress={() => { console.log('Perfil click'); setShowProfileModal(true); }}
-        onNotificationsPress={() => navigation.navigate('Notifications' as never)}
+        onNotificationsPress={() => { fetchMessages(); setShowMessagesModal(true); }}
       />
       <Modal
         animationType="slide"
@@ -680,15 +715,30 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 <Text className="text-slate-700 font-bold">Volver</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={async () => {
-                  try {
-                    await AsyncStorage.removeItem('userSession');
-                  } catch (e) {
-                    console.error('Error al cerrar sesión:', e);
+                onPress={() => {
+                  const performLogout = async () => {
+                    try {
+                      await AsyncStorage.removeItem('userSession');
+                    } catch (e) {
+                      console.error('Error al cerrar sesión:', e);
+                    }
+                    setShowProfileModal(false);
+                    // @ts-ignore
+                    navigation.replace('Login');
+                  };
+
+                  if (isActive) {
+                    Alert.alert(
+                      "Turno Activo",
+                      "Tienes un turno en curso. ¿Estás seguro de que quieres cerrar sesión sin finalizarlo?",
+                      [
+                        { text: "Cancelar", style: "cancel" },
+                        { text: "Cerrar Sesión", style: "destructive", onPress: performLogout }
+                      ]
+                    );
+                  } else {
+                    performLogout();
                   }
-                  setShowProfileModal(false);
-                  // @ts-ignore
-                  navigation.replace('Login');
                 }}
                 className="flex-1 bg-red-500 py-3 rounded-xl items-center"
               >
@@ -960,6 +1010,61 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 className="w-full bg-blue-500 py-4 rounded-2xl shadow-lg mt-4 items-center"
               >
                 <Text className="text-white font-bold">Registrar en Bitácora</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Messages Modal */}
+      <Modal
+        animationType="slide"
+        presentationStyle="pageSheet"
+        visible={showMessagesModal}
+        onRequestClose={() => setShowMessagesModal(false)}
+      >
+        <View className="flex-1 bg-slate-50">
+          <View className="p-4 bg-white border-b border-slate-200 flex-row justify-between items-center">
+            <Text className="text-lg font-bold text-slate-800">Mensajes</Text>
+            <TouchableOpacity onPress={() => setShowMessagesModal(false)} className="p-2 bg-slate-100 rounded-full">
+              <MaterialIcons name="close" size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView 
+            className="flex-1 p-4" 
+            contentContainerStyle={{ paddingBottom: 20 }}
+            ref={scrollViewRef}
+            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+          >
+            {messages.length === 0 ? (
+              <Text className="text-center text-slate-400 mt-10">No hay mensajes.</Text>
+            ) : (
+              messages.map((msg) => (
+                <View key={msg.id_mensaje} className={`mb-4 p-4 rounded-2xl max-w-[85%] ${msg.emisor === 'GUARDIA' ? 'bg-indigo-100 self-end rounded-tr-none' : 'bg-white self-start rounded-tl-none border border-slate-200'}`}>
+                  <Text className={`text-xs font-bold mb-1 ${msg.emisor === 'GUARDIA' ? 'text-indigo-600' : 'text-slate-500'}`}>
+                    {msg.emisor === 'GUARDIA' ? 'Tú' : 'Supervisor'} • {new Date(msg.fecha_hora).toLocaleString()}
+                  </Text>
+                  <Text className="text-slate-600">{msg.contenido}</Text>
+                </View>
+              ))
+            )}
+          </ScrollView>
+
+          <View className="p-4 bg-white border-t border-slate-200">
+            <View className="flex-row gap-2 items-center">
+              <TextInput
+                value={replyBody}
+                onChangeText={setReplyBody}
+                placeholder="Escribe una respuesta..."
+                className="flex-1 bg-slate-100 p-3 rounded-xl border border-slate-200"
+                multiline
+              />
+              <TouchableOpacity 
+                onPress={handleSendReply}
+                className="bg-indigo-600 p-3 rounded-xl items-center justify-center"
+              >
+                <MaterialIcons name="send" size={24} color="white" />
               </TouchableOpacity>
             </View>
           </View>
