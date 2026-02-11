@@ -400,17 +400,28 @@ app.post('/checks', (req, res) => {
 
 // Endpoint para obtener checks de presencia (Historial)
 app.get('/checks', (req, res) => {
-  const { id_guardia } = req.query;
+  const { id_guardia, search } = req.query;
   let query = `
-    SELECT cp.*, p.puesto 
+    SELECT cp.*, p.puesto, g.nombre, g.apellido
     FROM checks_presencia cp
     LEFT JOIN puestos p ON cp.id_puesto = p.id_puesto
+    JOIN guardias g ON cp.id_guardia = g.id_guardia
   `;
   const params = [];
+  const conditions = [];
   
   if (id_guardia) {
-    query += ' WHERE cp.id_guardia = ?';
+    conditions.push('cp.id_guardia = ?');
     params.push(id_guardia);
+  }
+
+  if (search) {
+    conditions.push('CONCAT(g.nombre, " ", g.apellido) LIKE ?');
+    params.push(`%${search}%`);
+  }
+  
+  if (conditions.length > 0) {
+    query += ' WHERE ' + conditions.join(' AND ');
   }
   
   query += ' ORDER BY cp.fecha_hora DESC LIMIT 50';
@@ -770,15 +781,24 @@ app.get('/dashboard/alerts', async (req, res) => {
 
 // Endpoint para obtener todos los eventos (bitácora completa) para el dashboard
 app.get('/dashboard/events', (req, res) => {
-  const query = `
+  const { search } = req.query;
+
+  let query = `
     SELECT b.*, g.nombre, g.apellido 
     FROM bitacoras b 
     JOIN guardias g ON b.id_guardia = g.id_guardia 
-    ORDER BY b.id_bitacora DESC 
-    LIMIT 50
   `;
   
-  db.query(query, (err, results) => {
+  const params = [];
+
+  if (search) {
+    query += ' WHERE CONCAT(g.nombre, " ", g.apellido) LIKE ? ';
+    params.push(`%${search}%`);
+  }
+
+  query += ' ORDER BY b.id_bitacora DESC LIMIT 50';
+  
+  db.query(query, params, (err, results) => {
     if (err) {
       console.error('Error al obtener eventos:', err);
       return res.status(500).json({ error: 'Error al obtener eventos' });

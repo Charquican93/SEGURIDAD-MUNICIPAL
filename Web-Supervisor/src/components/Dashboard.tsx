@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import Layout from './Layout';
 import { API_URL } from '../config';
@@ -35,6 +35,17 @@ const Dashboard: React.FC = () => {
   const [todaysRounds, setTodaysRounds] = useState<any[]>([]);
   const [guardFilter, setGuardFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [roundsPeriod, setRoundsPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [eventSearch, setEventSearch] = useState('');
+  const [globalChecks, setGlobalChecks] = useState<any[]>([]);
+  const [checkSearch, setCheckSearch] = useState('');
+
+  // Referencias para el arrastre (drag-to-scroll) en Puestos
+  const puestosContainerRef = useRef<HTMLDivElement>(null);
+  const guardiasContainerRef = useRef<HTMLDivElement>(null);
+  const isDownRef = useRef(false);
+  const startXRef = useRef(0);
+  const scrollLeftRef = useRef(0);
+  const isDraggingRef = useRef(false);
 
   const fetchData = async () => {
     // 1. Cargar estadísticas
@@ -53,14 +64,6 @@ const Dashboard: React.FC = () => {
       console.error('Error fetching alerts:', error);
     }
 
-    // 3. Cargar eventos
-    try {
-      const response = await axios.get(`${API_URL}/dashboard/events`);
-      setEvents(response.data);
-    } catch (error) {
-      console.error('Error fetching events:', error);
-    }
-
     // 4. Cargar puestos y guardias por separado
     try {
       const [puestosRes, guardiasRes] = await Promise.all([
@@ -75,12 +78,50 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const fetchEvents = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/dashboard/events`, {
+        params: { search: eventSearch }
+      });
+      setEvents(response.data);
+    } catch (error) {
+      console.error('Error fetching events:', error);
+    }
+  };
+
+  const fetchChecks = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/checks`, {
+        params: { search: checkSearch }
+      });
+      setGlobalChecks(response.data);
+    } catch (error) {
+      console.error('Error fetching checks:', error);
+    }
+  };
+
   useEffect(() => {
     fetchData();
     // Actualizar cada 30 segundos
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // useEffect para buscar eventos con debounce
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => {
+      fetchEvents();
+    }, 300); // Espera 300ms después de que el usuario deja de escribir
+    return () => clearTimeout(debounceTimer);
+  }, [eventSearch]);
+
+  // useEffect para buscar checks con debounce
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => {
+      fetchChecks();
+    }, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [checkSearch]);
 
   const handleGuardClick = async (guard: any) => {
     setSelectedGuard(guard);
@@ -138,6 +179,8 @@ const Dashboard: React.FC = () => {
     setSelectedPuesto(puesto);
     setShowPuestoModal(true);
     setPuestoRounds([]);
+    setExpandedRoundId(null);
+    setRoundPoints([]);
     try {
       const response = await axios.get(`${API_URL}/rondas?id_puesto=${puesto.id_puesto}`);
       setPuestoRounds(response.data);
@@ -149,6 +192,79 @@ const Dashboard: React.FC = () => {
   const closePuestoModal = () => {
     setShowPuestoModal(false);
     setSelectedPuesto(null);
+  };
+
+  // Manejadores de eventos para el arrastre de Puestos
+  const onMouseDownPuestos = (e: React.MouseEvent) => {
+    if (!puestosContainerRef.current) return;
+    isDownRef.current = true;
+    isDraggingRef.current = false;
+    startXRef.current = e.pageX - puestosContainerRef.current.offsetLeft;
+    scrollLeftRef.current = puestosContainerRef.current.scrollLeft;
+    puestosContainerRef.current.style.cursor = 'grabbing';
+  };
+
+  const onMouseLeavePuestos = () => {
+    isDownRef.current = false;
+    if (puestosContainerRef.current) puestosContainerRef.current.style.cursor = 'grab';
+  };
+
+  const onMouseUpPuestos = () => {
+    isDownRef.current = false;
+    if (puestosContainerRef.current) puestosContainerRef.current.style.cursor = 'grab';
+    // Pequeño retraso para permitir que el evento onClick verifique si fue arrastre
+    setTimeout(() => { isDraggingRef.current = false; }, 0);
+  };
+
+  const onMouseMovePuestos = (e: React.MouseEvent) => {
+    if (!isDownRef.current || !puestosContainerRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - puestosContainerRef.current.offsetLeft;
+    const walk = (x - startXRef.current) * 2; // Multiplicador de velocidad
+    if (Math.abs(walk) > 5) isDraggingRef.current = true; // Si se mueve más de 5px, es arrastre
+    puestosContainerRef.current.scrollLeft = scrollLeftRef.current - walk;
+  };
+
+  const handlePuestoCardClick = (puesto: any) => {
+    // Si se estaba arrastrando, ignorar el clic
+    if (isDraggingRef.current) return;
+    handlePuestoClick(puesto);
+  };
+
+  // Manejadores de eventos para el arrastre de Guardias
+  const onMouseDownGuardias = (e: React.MouseEvent) => {
+    if (!guardiasContainerRef.current) return;
+    isDownRef.current = true;
+    isDraggingRef.current = false;
+    startXRef.current = e.pageX - guardiasContainerRef.current.offsetLeft;
+    scrollLeftRef.current = guardiasContainerRef.current.scrollLeft;
+    guardiasContainerRef.current.style.cursor = 'grabbing';
+  };
+
+  const onMouseLeaveGuardias = () => {
+    isDownRef.current = false;
+    if (guardiasContainerRef.current) guardiasContainerRef.current.style.cursor = 'grab';
+  };
+
+  const onMouseUpGuardias = () => {
+    isDownRef.current = false;
+    if (guardiasContainerRef.current) guardiasContainerRef.current.style.cursor = 'grab';
+    setTimeout(() => { isDraggingRef.current = false; }, 0);
+  };
+
+  const onMouseMoveGuardias = (e: React.MouseEvent) => {
+    if (!isDownRef.current || !guardiasContainerRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - guardiasContainerRef.current.offsetLeft;
+    const walk = (x - startXRef.current) * 2;
+    if (Math.abs(walk) > 5) isDraggingRef.current = true;
+    guardiasContainerRef.current.scrollLeft = scrollLeftRef.current - walk;
+  };
+
+  const handleGuardCardClick = (guard: any) => {
+    // Si se estaba arrastrando, ignorar el clic
+    if (isDraggingRef.current) return;
+    handleGuardClick(guard);
   };
 
   const handleSendMessage = async () => {
@@ -204,14 +320,22 @@ const Dashboard: React.FC = () => {
       {/* Puestos (Almohadillas Horizontales) */}
       <div style={{ marginBottom: '30px' }}>
         <h3 style={{ marginTop: 0, color: '#4a5568', marginBottom: '15px' }}>Puestos</h3>
-        <div style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px' }}>
+        <div 
+          className="custom-scrollbar" 
+          ref={puestosContainerRef}
+          onMouseDown={onMouseDownPuestos}
+          onMouseLeave={onMouseLeavePuestos}
+          onMouseUp={onMouseUpPuestos}
+          onMouseMove={onMouseMovePuestos}
+          style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px', cursor: 'grab' }}
+        >
           {puestos.length === 0 ? (
             <div style={{ padding: '15px', background: 'white', borderRadius: '8px', color: '#718096' }}>
               No hay puestos registrados.
             </div>
           ) : (
             puestos.map((puesto: any) => (
-              <div key={puesto.id_puesto} onClick={() => handlePuestoClick(puesto)} style={{ 
+              <div key={puesto.id_puesto} onClick={() => handlePuestoCardClick(puesto)} style={{ 
                 minWidth: '200px',
                 background: 'white', 
                 padding: '15px', 
@@ -271,7 +395,15 @@ const Dashboard: React.FC = () => {
             </button>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px' }}>
+        <div 
+          className="custom-scrollbar" 
+          ref={guardiasContainerRef}
+          onMouseDown={onMouseDownGuardias}
+          onMouseLeave={onMouseLeaveGuardias}
+          onMouseUp={onMouseUpGuardias}
+          onMouseMove={onMouseMoveGuardias}
+          style={{ display: 'flex', gap: '15px', overflowX: 'auto', paddingBottom: '10px', cursor: 'grab' }}
+        >
           {guardias.filter((g: any) => {
             if (guardFilter === 'ACTIVE') return g.activo;
             if (guardFilter === 'INACTIVE') return !g.activo;
@@ -286,7 +418,7 @@ const Dashboard: React.FC = () => {
               if (guardFilter === 'INACTIVE') return !g.activo;
               return true;
             }).map((guardia: any) => (
-              <div key={guardia.id_guardia} onClick={() => handleGuardClick(guardia)} style={{ 
+              <div key={guardia.id_guardia} onClick={() => handleGuardCardClick(guardia)} style={{ 
                 minWidth: '200px',
                 background: 'white', 
                 padding: '15px', 
@@ -353,10 +485,78 @@ const Dashboard: React.FC = () => {
 
       {/* Sección Inferior: Alertas */}
       {/* Sección Inferior: Alertas y Eventos */}
-      <div style={{ marginTop: '30px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* Tabla de Últimas Alertas */}
-        <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
-          <h3 style={{ marginTop: 0, color: '#4a5568' }}>Últimas Alertas</h3>
+      <div style={{ marginTop: '30px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '20px' }}>
+        
+        {/* 1. Tabla de Checks de Presencia */}
+        <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+            <h3 style={{ margin: 0, color: '#4a5568' }}>Checks de Presencia</h3>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#a0aec0', zIndex: 1 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              </span>
+              <input
+                type="text"
+                placeholder="Buscar..."
+                value={checkSearch}
+                onChange={(e) => setCheckSearch(e.target.value)}
+                style={{
+                  padding: '6px 30px 6px 35px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e0',
+                  fontSize: '0.8rem',
+                  width: '140px',
+                  boxSizing: 'border-box'
+                }}
+              />
+              {checkSearch && (
+                <button
+                  onClick={() => setCheckSearch('')}
+                  style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 0 }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              )}
+            </div>
+          </div>
+          {globalChecks.length === 0 ? (
+            <p style={{ color: '#718096' }}>No hay checks recientes.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+              <tbody>
+                {globalChecks.map((check: any) => (
+                  <tr key={check.id_presencia} style={{ borderBottom: '1px solid #edf2f7' }}>
+                    <td style={{ padding: '10px 0', color: '#2d3748' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ 
+                          width: '36px', height: '36px', borderRadius: '50%', 
+                          background: '#3182ce', color: 'white', 
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                          fontSize: '0.85rem', fontWeight: 'bold', flexShrink: 0 
+                        }}>
+                          {check.nombre ? check.nombre.charAt(0) : ''}{check.apellido ? check.apellido.charAt(0) : ''}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 'bold', color: '#2d3748' }}>
+                            {check.nombre && check.apellido ? `${check.nombre} ${check.apellido}` : 'Guardia (Sin nombre)'}
+                          </div>
+                          <div style={{ fontSize: '0.85rem', color: '#4a5568' }}>{check.puesto || 'Sin puesto'}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '2px' }}>
+                            {new Date(check.fecha_hora).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* 2. Tabla de Últimas Alertas */}
+        <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
+          {/*<h3 style={{ marginTop: 0, color: '#4a5568' }}>Últimas Alertas</h3>*/}
           <h3 style={{ marginTop: 0, color: '#e53e3e' }}>Últimas Alertas de Pánico</h3>
           {alerts.length === 0 ? (
             <p style={{ color: '#718096' }}>No hay alertas recientes.</p>
@@ -386,19 +586,34 @@ const Dashboard: React.FC = () => {
                     </td>
                     <td style={{ padding: '10px 0', color: '#2d3748' }}>
                       <div style={{ fontWeight: 'bold' }}>{alert.nombre} {alert.apellido}</div>
-                      <div style={{ fontSize: '0.85rem' }}>{alert.descripcion}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '15px' }}>
-                        <span>{new Date(alert.fecha_hora).toLocaleString()}</span>
+                      <div style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span>{alert.descripcion}</span>
                         {alert.latitud && alert.longitud && (
                           <a 
                             href={`https://www.google.com/maps?q=${alert.latitud},${alert.longitud}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
-                            style={{ color: '#e53e3e', fontWeight: 'bold', fontSize: '0.8rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            style={{ 
+                              display: 'inline-flex', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              backgroundColor: '#e53e3e',
+                              color: 'white',
+                              borderRadius: '6px',
+                              textDecoration: 'none',
+                              fontSize: '0.7rem',
+                              fontWeight: 'bold',
+                              lineHeight: '1'
+                            }}
                           >
-                            📍 Ver Ubicación
+                            Ver <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                           </a>
                         )}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '4px' }}>
+                        {new Date(alert.fecha_hora).toLocaleString()}
                       </div>
                     </td>
                   </tr>
@@ -408,9 +623,48 @@ const Dashboard: React.FC = () => {
           )}
         </div>
 
-        {/* Tabla de Eventos (Bitácora) */}
-        <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
-          <h3 style={{ marginTop: 0, color: '#4a5568' }}>Registro de Eventos</h3>
+        {/* 3. Tabla de Eventos (Bitácora) */}
+        <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+            <h3 style={{ margin: 0, color: '#4a5568' }}>Registro de <br /> Eventos</h3>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#a0aec0', zIndex: 1 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              </span>
+              <input
+                type="text"
+                placeholder="Buscar..."
+                value={eventSearch}
+                onChange={(e) => setEventSearch(e.target.value)}
+                style={{
+                  padding: '6px 30px 6px 35px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e0',
+                  fontSize: '0.8rem',
+                  width: '140px',
+                  boxSizing: 'border-box'
+                }}
+              />
+              {eventSearch && (
+                <button
+                  onClick={() => setEventSearch('')}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#9ca3af',
+                    padding: 0
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+              )}
+            </div>
+          </div>
           {events.length === 0 ? (
             <p style={{ color: '#718096' }}>No hay eventos registrados.</p>
           ) : (
@@ -425,7 +679,7 @@ const Dashboard: React.FC = () => {
                         padding: '2px 6px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' 
                       }}>{event.type}</span>
                     </td>
-                    <td style={{ padding: '10px 0', color: '#2d3748' }}>
+                    <td style={{ padding: '10px 0 10px 15px', color: '#2d3748' }}>
                       <div style={{ fontWeight: 'bold' }}>{event.author}</div>
                       <div style={{ fontSize: '0.85rem' }}>{event.description}</div>
                       <div style={{ fontSize: '0.75rem', color: '#718096' }}>
@@ -608,6 +862,7 @@ const Dashboard: React.FC = () => {
                     <tr style={{ background: '#f7fafc', borderBottom: '2px solid #e2e8f0' }}>
                       <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Fecha/Hora</th>
                       <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Ruta</th>
+                      <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Guardia</th>
                       <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Estado</th>
                       <th style={{ padding: '12px', textAlign: 'left', color: '#4a5568' }}>Progreso</th>
                     </tr>
@@ -623,6 +878,16 @@ const Dashboard: React.FC = () => {
                             {ronda.fecha ? new Date(ronda.fecha).toLocaleDateString() : ''} {ronda.hora}
                           </td>
                           <td style={{ padding: '12px', color: '#2d3748', fontWeight: '500' }}>{ronda.nombre_ruta}</td>
+                          <td style={{ padding: '12px', color: '#2d3748' }}>
+                            {ronda.nombre_guardia ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3182ce', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 'bold' }}>
+                                  {ronda.nombre_guardia.charAt(0)}{ronda.apellido_guardia ? ronda.apellido_guardia.charAt(0) : ''}
+                                </div>
+                                <span>{ronda.nombre_guardia} {ronda.apellido_guardia}</span>
+                              </div>
+                            ) : <span style={{color: '#cbd5e0', fontStyle: 'italic'}}>Sin asignar</span>}
+                          </td>
                           <td style={{ padding: '12px' }}>
                             <span style={{
                               padding: '4px 8px',
@@ -641,7 +906,7 @@ const Dashboard: React.FC = () => {
                         </tr>
                         {expandedRoundId === ronda.id_ronda && (
                           <tr>
-                            <td colSpan={4} style={{ padding: '15px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                            <td colSpan={5} style={{ padding: '15px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                               <p style={{ margin: '0 0 10px 0', fontSize: '0.85rem', fontWeight: 'bold', color: '#4a5568' }}>Puntos de Control:</p>
                               {loadingPoints ? (
                                 <p style={{ fontSize: '0.8rem', color: '#718096' }}>Cargando puntos...</p>
@@ -801,27 +1066,73 @@ const Dashboard: React.FC = () => {
                   </thead>
                   <tbody>
                     {puestoRounds.map((ronda: any) => (
-                      <tr key={ronda.id_ronda} style={{ borderBottom: '1px solid #edf2f7' }}>
-                        <td style={{ padding: '12px', color: '#2d3748' }}>
-                          {ronda.fecha ? new Date(ronda.fecha).toLocaleDateString() : ''} {ronda.hora}
-                        </td>
-                        <td style={{ padding: '12px', color: '#2d3748', fontWeight: '500' }}>{ronda.nombre_ruta}</td>
-                        <td style={{ padding: '12px' }}>
-                          <span style={{
-                            padding: '4px 8px',
-                            borderRadius: '12px',
-                            fontSize: '0.75rem',
-                            fontWeight: 'bold',
-                            backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
-                            color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
-                          }}>
-                            {ronda.estado}
-                          </span>
-                        </td>
-                        <td style={{ padding: '12px', color: '#4a5568' }}>
-                          {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'} pts
-                        </td>
-                      </tr>
+                      <React.Fragment key={ronda.id_ronda}>
+                        <tr 
+                          onClick={() => handleRoundClick(ronda.id_ronda)}
+                          style={{ borderBottom: '1px solid #edf2f7', cursor: 'pointer', backgroundColor: expandedRoundId === ronda.id_ronda ? '#f8fafc' : 'transparent' }}
+                        >
+                          <td style={{ padding: '12px', color: '#2d3748' }}>
+                            {ronda.fecha ? new Date(ronda.fecha).toLocaleDateString() : ''} {ronda.hora}
+                          </td>
+                          <td style={{ padding: '12px', color: '#2d3748', fontWeight: '500' }}>{ronda.nombre_ruta}</td>
+                          <td style={{ padding: '12px' }}>
+                            <span style={{
+                              padding: '4px 8px',
+                              borderRadius: '12px',
+                              fontSize: '0.75rem',
+                              fontWeight: 'bold',
+                              backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
+                              color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
+                            }}>
+                              {ronda.estado}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px', color: '#4a5568' }}>
+                            {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'} pts
+                          </td>
+                        </tr>
+                        {expandedRoundId === ronda.id_ronda && (
+                          <tr>
+                            <td colSpan={4} style={{ padding: '15px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                              <p style={{ margin: '0 0 10px 0', fontSize: '0.85rem', fontWeight: 'bold', color: '#4a5568' }}>Puntos de Control:</p>
+                              {loadingPoints ? (
+                                <p style={{ fontSize: '0.8rem', color: '#718096' }}>Cargando puntos...</p>
+                              ) : roundPoints.length === 0 ? (
+                                <p style={{ fontSize: '0.8rem', color: '#718096' }}>No hay puntos registrados en esta ronda.</p>
+                              ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
+                                  {roundPoints.map((point: any) => (
+                                    <div key={point.id_punto} style={{ 
+                                      background: 'white', 
+                                      padding: '8px', 
+                                      borderRadius: '6px', 
+                                      border: `1px solid ${point.marcado ? '#c6f6d5' : '#e2e8f0'}`,
+                                      display: 'flex',
+                                      alignItems: 'center'
+                                    }}>
+                                      <div style={{ 
+                                        width: '10px', 
+                                        height: '10px', 
+                                        borderRadius: '50%', 
+                                        backgroundColor: point.marcado ? '#38a169' : '#cbd5e0', 
+                                        marginRight: '8px' 
+                                      }} />
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: '0.8rem', fontWeight: '500', color: point.marcado ? '#2d3748' : '#718096' }}>{point.nombre}</div>
+                                        {point.marcado && (
+                                          <div style={{ fontSize: '0.7rem', color: '#38a169' }}>
+                                            {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
