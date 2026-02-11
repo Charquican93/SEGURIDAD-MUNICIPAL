@@ -11,6 +11,7 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = React.useState<any>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
   React.useEffect(() => {
     const session = localStorage.getItem('userSession');
@@ -36,6 +37,49 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
 
   return (
     <div className="app-container">
+      {/* Estilos para versión móvil */}
+      <style>{`
+        @media (max-width: 768px) {
+          .sidebar {
+            position: fixed;
+            left: ${mobileMenuOpen ? '0' : '-280px'};
+            top: 0;
+            bottom: 0;
+            z-index: 1000;
+            transition: left 0.3s ease;
+            width: 260px;
+            box-shadow: 4px 0 10px rgba(0,0,0,0.1);
+          }
+          .main-content {
+            width: 100%;
+            margin-left: 0;
+          }
+          .mobile-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 999;
+            display: ${mobileMenuOpen ? 'block' : 'none'};
+          }
+          .menu-toggle {
+            display: block !important;
+          }
+        }
+        .menu-toggle {
+          display: none;
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          cursor: pointer;
+          margin-right: 1rem;
+          color: #4a5568;
+          padding: 5px;
+        }
+      `}</style>
+      
+      {/* Overlay oscuro para cerrar menú en móvil */}
+      <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
+
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-header">
@@ -103,9 +147,12 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
 
       {/* Contenido Principal */}
       <main className="main-content">
-        <header className="header">
-          <h1>{title}</h1>
-          <div className="user-info">
+        <header className="header" style={{ display: 'flex', alignItems: 'center' }}>
+          <button className="menu-toggle" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            ☰
+          </button>
+          <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{title}</h1>
+          <div className="user-info" style={{ marginLeft: 'auto' }}>
             {/* Aquí podrías poner el nombre del supervisor logueado */}
             <span>Supervisor</span>
           </div>

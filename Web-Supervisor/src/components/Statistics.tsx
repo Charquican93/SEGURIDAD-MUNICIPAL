@@ -97,7 +97,7 @@ const Statistics: React.FC = () => {
 
   return (
     <Layout title="Estadísticas y Reportes">
-      <div id="report-content" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '25px' }}>
+      <div id="report-content" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '25px' }}>
         
         {/* Filtros de Fecha */}
         <div style={{ gridColumn: '1 / -1', background: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)', display: 'flex', gap: '20px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
