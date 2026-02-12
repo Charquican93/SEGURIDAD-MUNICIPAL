@@ -1,6 +1,8 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import axios from 'axios';
 import '../Layout.css';
+import { API_URL } from '../config';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -15,6 +17,7 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   const [isCollapsed, setIsCollapsed] = React.useState(
     localStorage.getItem('sidebarCollapsed') === 'true'
   );
+  const [unreadCount, setUnreadCount] = React.useState(0);
 
   React.useEffect(() => {
     const session = localStorage.getItem('userSession');
@@ -29,6 +32,23 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
   React.useEffect(() => {
     localStorage.setItem('sidebarCollapsed', String(isCollapsed));
   }, [isCollapsed]);
+
+  // Obtener conteo de mensajes no leídos
+  const fetchUnreadMessages = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/mensajes`);
+      const count = response.data.filter((m: any) => m.emisor === 'GUARDIA' && !m.leido).length;
+      setUnreadCount(count);
+    } catch (error) {
+      console.error('Error fetching unread messages:', error);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchUnreadMessages();
+    const interval = setInterval(fetchUnreadMessages, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('userSession');
@@ -272,11 +292,41 @@ const Layout: React.FC<LayoutProps> = ({ children, title }) => {
               key={item.path}
               className={`menu-item ${location.pathname === item.path ? 'active' : ''}`}
               onClick={() => { navigate(item.path); setMobileMenuOpen(false); }}
-              style={{ justifyContent: isCollapsed ? 'center' : 'flex-start' }}
+              style={{ justifyContent: isCollapsed ? 'center' : 'flex-start', position: 'relative' }}
               title={isCollapsed ? item.label : ''}
             >
-              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: isCollapsed ? 0 : '10px', minWidth: '24px' }}>{item.icon}</span>
-              {!isCollapsed && item.label}
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: isCollapsed ? 0 : '10px', minWidth: '24px', position: 'relative' }}>
+                {item.icon}
+                {isCollapsed && item.path === '/mensajes' && unreadCount > 0 && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-2px',
+                    right: '-2px',
+                    width: '8px',
+                    height: '8px',
+                    backgroundColor: '#e53e3e',
+                    borderRadius: '50%'
+                  }} />
+                )}
+              </span>
+              {!isCollapsed && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <span>{item.label}</span>
+                  {item.path === '/mensajes' && unreadCount > 0 && (
+                    <span style={{
+                      backgroundColor: '#e53e3e',
+                      color: 'white',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      marginLeft: 'auto'
+                    }}>
+                      {unreadCount}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </nav>

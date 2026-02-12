@@ -173,11 +173,9 @@ app.patch('/turnos/:id', (req, res) => {
 
 // Endpoint para login de guardias y supervisores
 app.post('/login', async (req, res) => {
-  console.log('POST /login recibido');
   const { rut, contrasena } = req.body;
   
   if (!rut || !contrasena) {
-    console.log('Faltan datos de acceso');
     return res.status(400).json({ error: 'Faltan datos de acceso' });
   }
 
@@ -211,7 +209,6 @@ app.post('/login', async (req, res) => {
         userResponse.role = 'supervisor';
         userResponse.isActive = true; // Supervisores siempre activos
         
-        console.log('Login exitoso como Supervisor:', rut);
         return res.json({ guardia: userResponse });
       }
     }
@@ -220,7 +217,6 @@ app.post('/login', async (req, res) => {
     const [guardias] = await db.promise().query('SELECT * FROM guardias WHERE rut = ?', [rut]);
 
     if (guardias.length === 0) {
-      console.log('RUT no encontrado en ninguna tabla');
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
@@ -240,7 +236,6 @@ app.post('/login', async (req, res) => {
     }
 
     if (!match) {
-      console.log('Contraseña incorrecta para el RUT:', rut);
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
@@ -277,10 +272,8 @@ app.post('/login', async (req, res) => {
       
       if (rondas.length > 0) {
         const puestoSugerido = rondas[0];
-        console.log('Login exitoso para Guardia:', rut, 'con puesto sugerido:', puestoSugerido.id_puesto);
         return res.json({ guardia: userResponse, puestoSugerido });
       } else {
-        console.log('Login exitoso para Guardia:', rut, 'sin puesto sugerido.');
         return res.json({ guardia: userResponse });
       }
     }
@@ -362,8 +355,6 @@ app.post('/bitacoras', (req, res) => {
     let columna = 'notificaciones'; // Por defecto (para NOTIFICACION u otros)
     if (tipoNormalizado === 'OBSERVACION') columna = 'observaciones';
     else if (tipoNormalizado === 'INCIDENCIA') columna = 'incidencias';
-    
-    console.log(`Guardando bitácora -> Tipo: ${tipo}, Columna destino: ${columna}`);
 
     // 3. Insertar en la tabla bitacoras
     // Asumimos que existe una columna 'foto' en la tabla. Si no, debes crearla: ALTER TABLE bitacoras ADD COLUMN foto LONGTEXT;
@@ -435,29 +426,26 @@ app.get('/checks', (req, res) => {
   });
 });
 
-// Endpoint para registrar marcaje de punto QR
-app.post('/marcajes', (req, res) => {
-  console.log('Intento de marcaje recibido:', req.body);
+// Endpoint para registrar marcaje de punto QR (REFACTORIZADO A ASYNC/AWAIT)
+app.post('/marcajes', async (req, res) => {
   const { id_ronda, id_punto, latitud, longitud } = req.body;
 
   if (!id_ronda || !id_punto) {
     return res.status(400).json({ error: 'Faltan datos del marcaje' });
   }
 
-  // 1. Buscar el ID real del punto (permite que el QR tenga el ID "1" o el nombre "E1-P1")
-  const findPointQuery = 'SELECT id_punto, id_ruta, latitud_esperada, longitud_esperada, radio_tolerancia FROM puntos_control WHERE id_punto = ? OR nombre = ? LIMIT 1';
+  try {
+    // 1. Buscar el ID real del punto (permite que el QR tenga el ID "1" o el nombre "E1-P1")
+    const [points] = await db.promise().query(
+      'SELECT id_punto, id_ruta, latitud_esperada, longitud_esperada, radio_tolerancia FROM puntos_control WHERE id_punto = ? OR nombre = ? LIMIT 1',
+      [id_punto, id_punto]
+    );
 
-  db.query(findPointQuery, [id_punto, id_punto], (err, results) => {
-    if (err) {
-      console.error('Error al buscar punto:', err.message);
-      return res.status(500).json({ error: 'Error al buscar punto de control' });
-    }
-    
-    if (results.length === 0) {
+    if (points.length === 0) {
       return res.status(404).json({ error: 'Punto de control no válido o no encontrado en BD' });
     }
 
-    const point = results[0];
+    const point = points[0];
     const realIdPunto = point.id_punto;
     const pointRouteId = point.id_ruta;
 
@@ -476,95 +464,67 @@ app.post('/marcajes', (req, res) => {
     }
 
     // 2. Obtener la ruta de la ronda para validar
-    db.query('SELECT id_ruta FROM rondas WHERE id_ronda = ?', [id_ronda], (errRonda, resRonda) => {
-      if (errRonda) {
-        console.error(errRonda);
-        return res.status(500).json({ error: 'Error al buscar información de la ronda' });
+    const [rondas] = await db.promise().query('SELECT id_ruta FROM rondas WHERE id_ronda = ?', [id_ronda]);
+    if (rondas.length === 0) return res.status(404).json({ error: 'Ronda no encontrada' });
+
+    const roundRouteId = rondas[0].id_ruta;
+
+    // VALIDACIÓN 1: El punto debe pertenecer a la ruta de la ronda
+    if (pointRouteId !== roundRouteId) {
+      return res.status(400).json({ error: 'Este punto no corresponde a la ronda actual.' });
+    }
+
+    // VALIDACIÓN 2: Verificar orden secuencial
+    const [pointsInRoute] = await db.promise().query('SELECT id_punto FROM puntos_control WHERE id_ruta = ? ORDER BY id_punto ASC', [roundRouteId]);
+    const currentIndex = pointsInRoute.findIndex(p => p.id_punto === realIdPunto);
+
+    // Si no es el primer punto de la lista, verificar que el anterior esté marcado
+    if (currentIndex > 0) {
+      const previousPointId = pointsInRoute[currentIndex - 1].id_punto;
+      const [prevMarcajes] = await db.promise().query('SELECT id_marcaje FROM marcajes_puntos WHERE id_ronda = ? AND id_punto = ?', [id_ronda, previousPointId]);
+      
+      if (prevMarcajes.length === 0) {
+        return res.status(400).json({ error: 'Orden incorrecto: Debes marcar el punto anterior primero.' });
       }
-      if (resRonda.length === 0) return res.status(404).json({ error: 'Ronda no encontrada' });
+    }
 
-      const roundRouteId = resRonda[0].id_ruta;
+    // VALIDACIÓN 3: El punto no debe haber sido escaneado previamente en esta ronda
+    const [dupMarcajes] = await db.promise().query('SELECT id_marcaje FROM marcajes_puntos WHERE id_ronda = ? AND id_punto = ?', [id_ronda, realIdPunto]);
+    if (dupMarcajes.length > 0) {
+      return res.status(400).json({ error: 'Este punto ya fue escaneado en esta ronda.' });
+    }
 
-      // VALIDACIÓN 1: El punto debe pertenecer a la ruta de la ronda
-      if (pointRouteId !== roundRouteId) {
-        return res.status(400).json({ error: 'Este punto no corresponde a la ronda actual.' });
-      }
+    // 4. Insertar marcaje
+    const [insertResult] = await db.promise().query(
+      'INSERT INTO marcajes_puntos (id_ronda, id_punto, latitud, longitud) VALUES (?, ?, ?, ?)',
+      [id_ronda, realIdPunto, latitud, longitud]
+    );
 
-      // VALIDACIÓN 2: Verificar orden secuencial
-      db.query('SELECT id_punto FROM puntos_control WHERE id_ruta = ? ORDER BY id_punto ASC', [roundRouteId], (errSeq, pointsInRoute) => {
-        if (errSeq) {
-          console.error(errSeq);
-          return res.status(500).json({ error: 'Error al verificar secuencia de puntos' });
-        }
+    // 5. Calcular progreso
+    const [totalRes] = await db.promise().query('SELECT COUNT(*) as total FROM puntos_control WHERE id_ruta = ?', [roundRouteId]);
+    const totalPuntos = totalRes[0].total;
 
-        const currentIndex = pointsInRoute.findIndex(p => p.id_punto === realIdPunto);
-        
-        const checkPreviousAndProceed = () => {
-          // VALIDACIÓN 3: El punto no debe haber sido escaneado previamente en esta ronda
-          db.query('SELECT id_marcaje FROM marcajes_puntos WHERE id_ronda = ? AND id_punto = ?', [id_ronda, realIdPunto], (errDup, resDup) => {
-            if (errDup) {
-              console.error(errDup);
-              return res.status(500).json({ error: 'Error al verificar duplicados' });
-            }
-            if (resDup.length > 0) {
-              return res.status(400).json({ error: 'Este punto ya fue escaneado en esta ronda.' });
-            }
+    const [marcadosRes] = await db.promise().query('SELECT COUNT(DISTINCT id_punto) as marcados FROM marcajes_puntos WHERE id_ronda = ?', [id_ronda]);
+    const puntosMarcados = marcadosRes[0].marcados;
 
-            // 4. Insertar marcaje
-            const insertQuery = 'INSERT INTO marcajes_puntos (id_ronda, id_punto, latitud, longitud) VALUES (?, ?, ?, ?)';
-            db.query(insertQuery, [id_ronda, realIdPunto, latitud, longitud], (errInsert, resultInsert) => {
-              if (errInsert) {
-                console.error('Error MySQL al guardar marcaje:', errInsert.message);
-                return res.status(500).json({ error: 'Error al guardar el marcaje' });
-              }
+    const roundCompleted = puntosMarcados >= totalPuntos;
+    if (roundCompleted) {
+      await db.promise().query('UPDATE rondas SET estado = "COMPLETADA" WHERE id_ronda = ?', [id_ronda]);
+    } else {
+      await db.promise().query('UPDATE rondas SET estado = "EN_PROGRESO" WHERE id_ronda = ? AND estado = "PENDIENTE"', [id_ronda]);
+    }
 
-              // 5. Calcular progreso
-              const idRuta = roundRouteId;
-
-              // Contar total puntos de la ruta
-              db.query('SELECT COUNT(*) as total FROM puntos_control WHERE id_ruta = ?', [idRuta], (errTotal, resTotal) => {
-                if (errTotal) return res.json({ success: true, id_marcaje: resultInsert.insertId, roundCompleted: false });
-                const totalPuntos = resTotal[0].total;
-
-                // Contar cuántos puntos ÚNICOS ha marcado el guardia en esta ronda
-                db.query('SELECT COUNT(DISTINCT id_punto) as marcados FROM marcajes_puntos WHERE id_ronda = ?', [id_ronda], (errMarcados, resMarcados) => {
-                  if (errMarcados) return res.json({ success: true, id_marcaje: resultInsert.insertId, roundCompleted: false });
-                  const puntosMarcados = resMarcados[0].marcados;
-
-                  const roundCompleted = puntosMarcados >= totalPuntos;
-                  if (roundCompleted) {
-                    db.query('UPDATE rondas SET estado = "COMPLETADA" WHERE id_ronda = ?', [id_ronda]);
-                  } else {
-                    db.query('UPDATE rondas SET estado = "EN_PROGRESO" WHERE id_ronda = ? AND estado = "PENDIENTE"', [id_ronda]);
-                  }
-                  res.json({ success: true, id_marcaje: resultInsert.insertId, roundCompleted, progress: { current: puntosMarcados, total: totalPuntos } });
-                });
-              });
-            });
-          });
-        };
-
-        // Si no es el primer punto de la lista, verificar que el anterior esté marcado
-        if (currentIndex > 0) {
-          const previousPointId = pointsInRoute[currentIndex - 1].id_punto;
-          db.query('SELECT id_marcaje FROM marcajes_puntos WHERE id_ronda = ? AND id_punto = ?', [id_ronda, previousPointId], (errPrev, resPrev) => {
-            if (errPrev) {
-              console.error(errPrev);
-              return res.status(500).json({ error: 'Error al verificar punto anterior' });
-            }
-            
-            if (resPrev.length === 0) {
-              return res.status(400).json({ error: 'Orden incorrecto: Debes marcar el punto anterior primero.' });
-            }
-            checkPreviousAndProceed();
-          });
-        } else {
-          // Es el primer punto, proceder
-          checkPreviousAndProceed();
-        }
-      });
+    res.json({ 
+      success: true, 
+      id_marcaje: insertResult.insertId, 
+      roundCompleted, 
+      progress: { current: puntosMarcados, total: totalPuntos } 
     });
-  });
+
+  } catch (err) {
+    console.error('Error en /marcajes:', err.message);
+    res.status(500).json({ error: 'Error interno del servidor al registrar marcaje' });
+  }
 });
 
 // Endpoint para obtener rondas asignadas
@@ -639,22 +599,13 @@ app.patch('/rondas/:id', (req, res) => {
   const { id } = req.params;
   const { estado } = req.body;
   
-  console.log(`[PATCH] Solicitud para actualizar ronda ID: ${id} a estado: ${estado}`);
-
   if (!estado) {
     return res.status(400).json({ error: 'Falta el estado' });
   }
 
   db.query('UPDATE rondas SET estado = ? WHERE id_ronda = ?', [estado, id], (err, result) => {
     if (err) {
-      console.error('Error al actualizar ronda:', err);
       return res.status(500).json({ error: 'Error al actualizar estado de la ronda' });
-    }
-    
-    if (result.affectedRows === 0) {
-      console.warn(`[PATCH] Alerta: No se encontró la ronda ID ${id} o ya tenía el estado ${estado}. Filas afectadas: 0`);
-    } else {
-      console.log(`[PATCH] Éxito: Ronda ID ${id} actualizada correctamente.`);
     }
     res.json({ success: true, affected: result.affectedRows });
   });
@@ -704,8 +655,6 @@ app.post('/panic', async (req, res) => {
   try {
     const { id_guardia, id_puesto, latitud, longitud } = req.body;
 
-    console.log(`[ALERTA DE PÁNICO] Recibida del guardia ID: ${id_guardia}`);
-
     if (!id_guardia || typeof latitud === 'undefined' || typeof longitud === 'undefined') {
       return res.status(400).json({ error: 'Faltan datos esenciales para la alerta (guardia, latitud, longitud).' });
     }
@@ -714,12 +663,6 @@ app.post('/panic', async (req, res) => {
     
     // Usamos la versión de promesas de la librería para un mejor manejo de errores con async/await
     const [result] = await db.promise().query(query, [id_guardia, id_puesto || null, latitud, longitud]);
-
-    console.log('******************************************************');
-    console.log(`** SIMULACIÓN: Notificando al supervisor sobre alerta **`);
-    console.log(`** Guardia: ${id_guardia}, Puesto: ${id_puesto || 'N/A'} **`);
-    console.log(`** Ubicación: https://www.google.com/maps?q=${latitud},${longitud} **`);
-    console.log('******************************************************');
 
     if (result && 'insertId' in result) {
       res.status(201).json({ success: true, id_alerta: result.insertId, message: 'Alerta registrada y supervisor notificado.' });
@@ -828,7 +771,8 @@ app.get('/dashboard/events', (req, res) => {
         date: dateObj.toLocaleDateString(),
         type,
         description: description || '',
-        author: `${row.nombre} ${row.apellido}`
+        author: `${row.nombre} ${row.apellido}`,
+        photo: row.foto
       };
     });
     res.json(events);
@@ -836,6 +780,43 @@ app.get('/dashboard/events', (req, res) => {
 });
 
 // --- SISTEMA DE MENSAJERÍA ---
+
+// 0. Enviar mensaje de difusión (Broadcast a todos los activos)
+app.post('/mensajes/broadcast', async (req, res) => {
+  const { titulo, contenido, emisor } = req.body;
+  
+  if (!contenido) {
+    return res.status(400).json({ error: 'Falta el contenido del mensaje' });
+  }
+
+  const tituloFinal = titulo || 'ANUNCIO GENERAL';
+  const sender = emisor || 'SUPERVISOR';
+
+  try {
+    // 1. Obtener todos los guardias activos
+    const [guardias] = await db.promise().query('SELECT id_guardia FROM guardias WHERE activo = 1');
+    
+    if (guardias.length === 0) {
+      return res.status(404).json({ error: 'No hay guardias activos para recibir el mensaje.' });
+    }
+
+    // 2. Insertar mensaje para cada guardia
+    const queries = guardias.map(g => {
+      return db.promise().query(
+        'INSERT INTO mensajes (id_guardia, titulo, contenido, emisor) VALUES (?, ?, ?, ?)',
+        [g.id_guardia, tituloFinal, contenido, sender]
+      );
+    });
+
+    await Promise.all(queries);
+    
+    res.json({ success: true, count: guardias.length, message: `Mensaje enviado a ${guardias.length} guardias activos.` });
+
+  } catch (err) {
+    console.error('Error en broadcast:', err);
+    res.status(500).json({ error: 'Error al enviar difusión' });
+  }
+});
 
 // 1. Enviar mensaje (Supervisor -> Guardia)
 app.post('/mensajes', (req, res) => {
@@ -894,6 +875,23 @@ app.patch('/mensajes/:id/leido', (req, res) => {
     res.json({ success: true });
   });
 });
+
+// 4. Actualizar mensaje (Soporte para PATCH y PUT)
+const updateMessage = (req, res) => {
+  const { id } = req.params;
+  const { leido } = req.body;
+
+  if (leido === undefined) {
+    return res.status(400).json({ error: 'Faltan datos para actualizar (leido)' });
+  }
+
+  db.query('UPDATE mensajes SET leido = ? WHERE id_mensaje = ?', [leido, id], (err, result) => {
+    if (err) return res.status(500).json({ error: 'Error al actualizar mensaje' });
+    res.json({ success: true });
+  });
+};
+app.patch('/mensajes/:id', updateMessage);
+app.put('/mensajes/:id', updateMessage);
 
 // Endpoint para analíticas y gráficos
 app.get('/dashboard/analytics', async (req, res) => {

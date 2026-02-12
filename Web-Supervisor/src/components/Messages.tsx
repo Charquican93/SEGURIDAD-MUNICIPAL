@@ -10,6 +10,8 @@ const Messages: React.FC = () => {
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showBroadcastModal, setShowBroadcastModal] = useState(false);
+  const [broadcastBody, setBroadcastBody] = useState('');
 
   // Cargar datos iniciales
   const fetchData = async () => {
@@ -38,6 +40,32 @@ const Messages: React.FC = () => {
     }
   }, [selectedGuardId, allMessages]);
 
+  // Marcar mensajes como leídos automáticamente al abrir el chat del guardia
+  useEffect(() => {
+    if (selectedGuardId && allMessages.length > 0) {
+      const unreadMsgs = allMessages.filter(m => 
+        m.id_guardia === selectedGuardId && 
+        m.emisor === 'GUARDIA' && 
+        !m.leido
+      );
+
+      if (unreadMsgs.length > 0) {
+        // 1. Actualizar en el backend
+        unreadMsgs.forEach(msg => {
+          axios.patch(`${API_URL}/mensajes/${msg.id_mensaje}`, { leido: 1 })
+            .catch(e => console.error('Error marcando mensaje como leído:', e));
+        });
+
+        // 2. Actualizar estado local para que desaparezca la notificación visualmente
+        setAllMessages(prev => prev.map(m => 
+          (m.id_guardia === selectedGuardId && m.emisor === 'GUARDIA' && !m.leido)
+            ? { ...m, leido: true }
+            : m
+        ));
+      }
+    }
+  }, [selectedGuardId, allMessages]);
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !selectedGuardId) return;
@@ -54,6 +82,26 @@ const Messages: React.FC = () => {
     } catch (error) {
       console.error('Error enviando mensaje:', error);
       alert('No se pudo enviar el mensaje');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleBroadcast = async () => {
+    if (!broadcastBody.trim()) return;
+    setSending(true);
+    try {
+      const res = await axios.post(`${API_URL}/mensajes/broadcast`, {
+        titulo: 'ANUNCIO GENERAL',
+        contenido: broadcastBody
+      });
+      alert(res.data.message || 'Difusión enviada correctamente');
+      setBroadcastBody('');
+      setShowBroadcastModal(false);
+      fetchData();
+    } catch (error: any) {
+      console.error(error);
+      alert(error.response?.data?.error || 'Error al enviar difusión');
     } finally {
       setSending(false);
     }
@@ -97,8 +145,40 @@ const Messages: React.FC = () => {
         
         {/* Lista de Contactos (Izquierda) */}
         <div style={{ width: '300px', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', background: '#f8fafc' }}>
-          <div style={{ padding: '15px', borderBottom: '1px solid #e2e8f0', fontWeight: 'bold', color: '#4a5568' }}>
-            Guardias ({guards.length})
+          <div style={{ padding: '15px', borderBottom: '1px solid #e2e8f0', fontWeight: 'bold', color: '#4a5568', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Guardias ({guards.length})</span>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button 
+                onClick={() => setShowBroadcastModal(true)}
+                style={{ 
+                  background: 'white', 
+                  border: '1px solid #e53e3e', 
+                  cursor: 'pointer', 
+                  color: '#e53e3e', 
+                  padding: '5px 12px', 
+                  borderRadius: '6px', 
+                  fontSize: '0.75rem', 
+                  fontWeight: 'bold',
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e53e3e'; e.currentTarget.style.color = 'white'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'white'; e.currentTarget.style.color = '#e53e3e'; }}
+                title="Enviar mensaje a todos los activos"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                Difusión
+              </button>
+              <button 
+                onClick={fetchData}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3182ce', padding: '4px', display: 'flex', alignItems: 'center' }}
+                title="Recargar mensajes"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              </button>
+            </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {guardsList.map(guard => (
@@ -191,8 +271,13 @@ const Messages: React.FC = () => {
                         }}>
                           {msg.contenido}
                         </div>
-                        <div style={{ fontSize: '0.7rem', color: '#a0aec0', marginTop: '4px', textAlign: isMe ? 'right' : 'left' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#a0aec0', marginTop: '4px', textAlign: isMe ? 'right' : 'left', display: 'flex', alignItems: 'center', justifyContent: isMe ? 'flex-end' : 'flex-start', gap: '4px' }}>
                           {new Date(msg.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {new Date(msg.fecha_hora).toLocaleDateString()}
+                          {isMe && (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill={msg.leido ? "#3182ce" : "#cbd5e0"} xmlns="http://www.w3.org/2000/svg">
+                              <path d="M18 7L16.59 5.59L10.25 11.93L11.66 13.34L18 7ZM22.24 5.59L11.66 16.17L7.48 12L6.07 13.41L11.66 19L23.66 7L22.24 5.59ZM0.41 13.41L6 19L7.41 17.59L1.83 12L0.41 13.41Z" />
+                            </svg>
+                          )}
                         </div>
                       </div>
                     );
@@ -231,6 +316,40 @@ const Messages: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Modal de Difusión */}
+      {showBroadcastModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000
+        }}>
+          <div style={{
+            background: 'white', padding: '25px', borderRadius: '12px', width: '90%', maxWidth: '500px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+          }}>
+            <h3 style={{ marginTop: 0, color: '#e53e3e', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+              Mensaje de Difusión
+            </h3>
+            <p style={{ color: '#718096', fontSize: '0.9rem', marginBottom: '15px' }}>
+              Este mensaje será enviado a <strong>todos los guardias activos</strong> en este momento. Úselo para alertas o anuncios generales.
+            </p>
+            <textarea
+              value={broadcastBody}
+              onChange={(e) => setBroadcastBody(e.target.value)}
+              placeholder="Escriba su anuncio aquí..."
+              style={{ width: '100%', minHeight: '100px', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e0', marginBottom: '5px', resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ textAlign: 'right', fontSize: '0.75rem', color: '#718096', marginBottom: '20px' }}>
+              {broadcastBody.length} caracteres
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={() => setShowBroadcastModal(false)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e0', background: 'white', color: '#4a5568', cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={handleBroadcast} disabled={sending || !broadcastBody.trim()} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', background: '#e53e3e', color: 'white', fontWeight: 'bold', cursor: 'pointer', opacity: sending ? 0.7 : 1 }}>{sending ? 'Enviando...' : 'Enviar a Todos'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 };

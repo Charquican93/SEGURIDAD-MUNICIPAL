@@ -40,10 +40,14 @@ const NotificationsScreen = () => {
     if (msg.leido) return;
 
     try {
-      await fetch(`${API_URL}/mensajes/${msg.id_mensaje}/leido`, { method: 'PATCH' });
+      await fetch(`${API_URL}/mensajes/${msg.id_mensaje}`, { 
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leido: 1 })
+      });
       // Actualizar localmente
       setMessages(prev => prev.map(m => 
-        m.id_mensaje === msg.id_mensaje ? { ...m, leido: 1 } : m
+        m.id_mensaje === msg.id_mensaje ? { ...m, leido: true } : m
       ));
     } catch (e) {
       console.error(e);
@@ -87,6 +91,12 @@ const NotificationsScreen = () => {
           <MaterialIcons name="arrow-back" size={24} color="#1e293b" />
         </TouchableOpacity>
         <Text style={styles.screenTitle}>Notificaciones</Text>
+        <TouchableOpacity
+          onPress={() => user && fetchMessages(user.id_guardia)}
+          style={{ marginLeft: 'auto', padding: 8 }}
+        >
+          <MaterialIcons name="refresh" size={24} color="#3b82f6" />
+        </TouchableOpacity>
       </View>
       
       <FlatList

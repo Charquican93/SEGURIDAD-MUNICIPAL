@@ -56,7 +56,11 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       const res = await fetch(`${API_URL}/mensajes?id_guardia=${user.id_guardia}`);
       if (res.ok) {
         const msgs = await res.json();
-        const unread = msgs.filter((m: any) => !m.leido).length;
+        // Filtrado robusto: considera no leído si es 0, false, null o "0"
+        const unread = msgs.filter((m: any) => 
+          (m.leido === 0 || m.leido === false || m.leido === null || m.leido === "0") && 
+          m.emisor !== 'GUARDIA'
+        ).length;
         setUnreadCount(unread);
       }
     } catch (e) {
@@ -204,7 +208,25 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       if (res.ok) {
         const data = await res.json();
         setMessages(data.reverse());
-        // Marcar como leídos localmente (opcional, idealmente llamar a API)
+        
+        // Identificar mensajes no leídos del supervisor
+        const unread = data.filter((m: any) => 
+          (m.leido === 0 || m.leido === false || m.leido === null || m.leido === "0") && 
+          m.emisor !== 'GUARDIA'
+        );
+        
+        if (unread.length > 0) {
+          setUnreadCount(0); // Limpiar notificación visualmente de inmediato
+          
+          // Actualizar estado en el backend para cada mensaje no leído
+          await Promise.all(unread.map((msg: any) => 
+            fetch(`${API_URL}/mensajes/${msg.id_mensaje}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ leido: 1 })
+            }).catch(e => console.log('Error marcando leido:', e))
+          ));
+        }
       }
     } catch (e) {
       console.log('Error fetching messages:', e);
@@ -245,7 +267,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           console.log('Error del servidor al guardar bitácora:', data);
           Alert.alert('Error', 'No se pudo guardar: ' + (data.error || 'Error desconocido'));
         } else {
-          console.log('Bitácora guardada exitosamente, ID:', data.id_bitacora);
         }
       } else {
         const text = await response.text();
@@ -515,8 +536,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           const message = response.status === 400 ? (result.error || 'Punto incorrecto') : ('No se pudo guardar en BD: ' + (result.error || 'Error desconocido'));
           Alert.alert(title, message);
         } else {
-          console.log('Marcaje guardado correctamente, ID:', result.id_marcaje);
-          
           if (result.roundCompleted) {
             Alert.alert("¡Ronda Completada!", "Has recorrido todos los puntos de control.");
             
@@ -683,7 +702,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           avatar: avatarUrl
         }}
         notificationCount={unreadCount}
-        onProfilePress={() => { console.log('Perfil click'); setShowProfileModal(true); }}
+        onProfilePress={() => { setShowProfileModal(true); }}
         onNotificationsPress={() => { fetchMessages(); setShowMessagesModal(true); }}
       />
       <Modal
@@ -1046,6 +1065,11 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                     {msg.emisor === 'GUARDIA' ? 'Tú' : 'Supervisor'} • {new Date(msg.fecha_hora).toLocaleString()}
                   </Text>
                   <Text className="text-slate-600">{msg.contenido}</Text>
+                  {msg.emisor === 'GUARDIA' && (
+                    <View className="items-end mt-1">
+                      <MaterialIcons name="done-all" size={16} color={(msg.leido === 1 || msg.leido === true) ? "#2563eb" : "#94a3b8"} />
+                    </View>
+                  )}
                 </View>
               ))
             )}

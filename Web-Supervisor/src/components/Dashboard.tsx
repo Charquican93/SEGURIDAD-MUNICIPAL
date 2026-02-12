@@ -2,6 +2,19 @@ import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import Layout from './Layout';
 import { API_URL } from '../config';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Configuración para corregir el icono por defecto de Leaflet
+const DefaultIcon = L.icon({
+    iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
+    shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34]
+});
+L.Marker.prototype.options.icon = DefaultIcon;
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({
@@ -38,6 +51,10 @@ const Dashboard: React.FC = () => {
   const [eventSearch, setEventSearch] = useState('');
   const [globalChecks, setGlobalChecks] = useState<any[]>([]);
   const [checkSearch, setCheckSearch] = useState('');
+  const [showMapModal, setShowMapModal] = useState(false);
+  const [mapLocation, setMapLocation] = useState<{lat: number, lng: number, title?: string} | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [showEventModal, setShowEventModal] = useState(false);
 
   // Referencias para el arrastre (drag-to-scroll) en Puestos
   const puestosContainerRef = useRef<HTMLDivElement>(null);
@@ -144,6 +161,24 @@ const Dashboard: React.FC = () => {
       setGuardRounds(roundsRes.data);
       setGuardChecks(checksRes.data);
       setGuardMessages(messagesRes.data);
+
+      // Marcar mensajes como leídos automáticamente (Filtrado robusto)
+      const unreadMsgs = messagesRes.data.filter((m: any) => 
+        m.emisor === 'GUARDIA' && 
+        (m.leido === 0 || m.leido === false || m.leido === null || m.leido === "0")
+      );
+
+      if (unreadMsgs.length > 0) {
+        // 1. Actualizar en backend
+        unreadMsgs.forEach((msg: any) => {
+          axios.patch(`${API_URL}/mensajes/${msg.id_mensaje}`, { leido: 1 })
+            .catch(err => console.error('Error marcando mensaje:', err.response?.data || err.message));
+        });
+        // 2. Actualizar visualmente
+        setGuardMessages(prev => prev.map((m: any) => 
+          (m.emisor === 'GUARDIA' && (m.leido === 0 || m.leido === false)) ? { ...m, leido: true } : m
+        ));
+      }
     } catch (error) {
       console.error('Error fetching guard details:', error);
     }
@@ -309,6 +344,16 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleViewLocation = (lat: number, lng: number, title: string) => {
+    setMapLocation({ lat, lng, title });
+    setShowMapModal(true);
+  };
+
+  const handleEventClick = (event: any) => {
+    setSelectedEvent(event);
+    setShowEventModal(true);
+  };
+
   // Calcular porcentaje actual basado en el periodo seleccionado
   const currentStats = stats.rounds[roundsPeriod] || { total: 0, completed: 0 };
   const currentProgress = currentStats.total > 0 
@@ -317,6 +362,16 @@ const Dashboard: React.FC = () => {
 
   return (
     <Layout title="Panel de Control">
+      <style>{`
+        @keyframes pulse-red {
+          0% { background-color: transparent; }
+          50% { background-color: rgba(229, 62, 62, 0.1); }
+          100% { background-color: transparent; }
+        }
+        .blink-red {
+          animation: pulse-red 2s infinite ease-in-out;
+        }
+      `}</style>
       {/* Puestos (Almohadillas Horizontales) */}
       <div style={{ marginBottom: '30px' }}>
         <h3 style={{ marginTop: 0, color: '#4a5568', marginBottom: '15px' }}>Puestos</h3>
@@ -536,11 +591,35 @@ const Dashboard: React.FC = () => {
                         }}>
                           {check.nombre ? check.nombre.charAt(0) : ''}{check.apellido ? check.apellido.charAt(0) : ''}
                         </div>
-                        <div>
+                        <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: 'bold', color: '#2d3748' }}>
                             {check.nombre && check.apellido ? `${check.nombre} ${check.apellido}` : 'Guardia (Sin nombre)'}
                           </div>
-                          <div style={{ fontSize: '0.85rem', color: '#4a5568' }}>{check.puesto || 'Sin puesto'}</div>
+                          <div style={{ fontSize: '0.85rem', color: '#4a5568', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span>{check.puesto || 'Sin puesto'}</span>
+                            {check.latitud && check.longitud && (
+                              <button 
+                                onClick={() => handleViewLocation(check.latitud, check.longitud, `Check: ${check.nombre} ${check.apellido}`)}
+                                style={{ 
+                                  display: 'inline-flex', 
+                                  alignItems: 'center', 
+                                  justifyContent: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  backgroundColor: '#3182ce',
+                                  color: 'white',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 'bold',
+                                  lineHeight: '1'
+                                }}
+                              >
+                                Ver <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                              </button>
+                            )}
+                          </div>
                           <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '2px' }}>
                             {new Date(check.fecha_hora).toLocaleString()}
                           </div>
@@ -564,7 +643,7 @@ const Dashboard: React.FC = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <tbody>
                 {alerts.map((alert: any, index) => (
-                  <tr key={index} style={{ borderBottom: '1px solid #edf2f7' }}>
+                  <tr key={index} className={new Date(alert.fecha_hora).toDateString() === new Date().toDateString() ? "blink-red" : ""} style={{ borderBottom: '1px solid #edf2f7' }}>
                     <td style={{ padding: '10px 0' }}>
                       <span style={{ 
                         backgroundColor: '#fed7d7', 
@@ -586,13 +665,11 @@ const Dashboard: React.FC = () => {
                     </td>
                     <td style={{ padding: '10px 0', color: '#2d3748' }}>
                       <div style={{ fontWeight: 'bold' }}>{alert.nombre} {alert.apellido}</div>
-                      <div style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <span>{alert.descripcion}</span>
                         {alert.latitud && alert.longitud && (
-                          <a 
-                            href={`https://www.google.com/maps?q=${alert.latitud},${alert.longitud}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
+                          <button 
+                            onClick={() => handleViewLocation(alert.latitud, alert.longitud, `Alerta: ${alert.nombre} ${alert.apellido}`)}
                             style={{ 
                               display: 'inline-flex', 
                               alignItems: 'center', 
@@ -602,14 +679,15 @@ const Dashboard: React.FC = () => {
                               backgroundColor: '#e53e3e',
                               color: 'white',
                               borderRadius: '6px',
-                              textDecoration: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
                               fontSize: '0.7rem',
                               fontWeight: 'bold',
                               lineHeight: '1'
                             }}
                           >
                             Ver <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                          </a>
+                          </button>
                         )}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#718096', marginTop: '4px' }}>
@@ -671,7 +749,11 @@ const Dashboard: React.FC = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <tbody>
                 {events.map((event: any) => (
-                  <tr key={event.id} style={{ borderBottom: '1px solid #edf2f7' }}>
+                  <tr 
+                    key={event.id} 
+                    onClick={() => handleEventClick(event)}
+                    style={{ borderBottom: '1px solid #edf2f7', cursor: 'pointer' }}
+                  >
                     <td style={{ padding: '10px 0' }}>
                       <span style={{ 
                         backgroundColor: event.type === 'INCIDENCIA' ? '#fed7d7' : event.type === 'OBSERVACION' ? '#feebc8' : '#bee3f8', 
@@ -802,7 +884,23 @@ const Dashboard: React.FC = () => {
               </button>
             </div>
 
-            <h3 style={{ color: '#4a5568', marginBottom: '15px' }}>Historial de Mensajes</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+              <h3 style={{ color: '#4a5568', margin: 0 }}>Historial de Mensajes</h3>
+              <button 
+                onClick={async () => {
+                  if (selectedGuard) {
+                    const msgsRes = await axios.get(`${API_URL}/mensajes?id_guardia=${selectedGuard.id_guardia}`);
+                    setGuardMessages(msgsRes.data);
+                  }
+                }}
+                style={{ 
+                  background: 'transparent', border: 'none', cursor: 'pointer', color: '#3182ce', 
+                  fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' 
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Recargar
+              </button>
+            </div>
             {guardMessages.length === 0 ? (
               <p style={{ color: '#718096', fontStyle: 'italic', marginBottom: '25px', background: '#f7fafc', padding: '10px', borderRadius: '8px' }}>
                 No hay mensajes enviados a este guardia.
@@ -1207,6 +1305,104 @@ const Dashboard: React.FC = () => {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Mapa */}
+      {showMapModal && mapLocation && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000
+        }}>
+          <div style={{
+            background: 'white', padding: '20px', borderRadius: '12px', width: '90%', maxWidth: '800px',
+            height: '500px', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+              <h3 style={{ margin: 0, color: '#2d3748' }}>{mapLocation.title || 'Ubicación'}</h3>
+              <button 
+                onClick={() => setShowMapModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#718096' }}
+              >
+                &times;
+              </button>
+            </div>
+            <div style={{ flex: 1, borderRadius: '8px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+               <MapContainer 
+                  center={[mapLocation.lat, mapLocation.lng]} 
+                  zoom={15} 
+                  style={{ height: '100%', width: '100%' }}
+                >
+                  <TileLayer
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                  />
+                  <Marker position={[mapLocation.lat, mapLocation.lng]}>
+                    <Popup>{mapLocation.title}</Popup>
+                  </Marker>
+                </MapContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Detalle de Evento */}
+      {showEventModal && selectedEvent && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+          backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000
+        }}>
+          <div style={{
+            background: 'white', padding: '30px', borderRadius: '12px', width: '90%', maxWidth: '600px',
+            maxHeight: '85vh', overflowY: 'auto', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+          }}>
+            <button 
+              onClick={() => setShowEventModal(false)}
+              style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#718096' }}
+            >
+              &times;
+            </button>
+
+            <h2 style={{ marginTop: 0, color: '#2d3748', borderBottom: '1px solid #e2e8f0', paddingBottom: '15px' }}>
+              Detalle del Evento
+            </h2>
+
+            <div style={{ marginBottom: '20px' }}>
+              <span style={{ 
+                backgroundColor: selectedEvent.type === 'INCIDENCIA' ? '#fed7d7' : selectedEvent.type === 'OBSERVACION' ? '#feebc8' : '#bee3f8', 
+                color: selectedEvent.type === 'INCIDENCIA' ? '#c53030' : selectedEvent.type === 'OBSERVACION' ? '#c05621' : '#2b6cb0',
+                padding: '4px 10px', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold' 
+              }}>
+                {selectedEvent.type}
+              </span>
+              <span style={{ float: 'right', color: '#718096', fontSize: '0.9rem' }}>
+                {selectedEvent.date} {selectedEvent.timestamp}
+              </span>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ margin: '0 0 5px 0', color: '#4a5568' }}>Autor:</h4>
+              <p style={{ margin: 0, color: '#2d3748', fontWeight: '500' }}>{selectedEvent.author}</p>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ margin: '0 0 5px 0', color: '#4a5568' }}>Descripción:</h4>
+              <p style={{ margin: 0, color: '#2d3748', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>{selectedEvent.description}</p>
+            </div>
+
+            {selectedEvent.photo && (
+              <div style={{ marginTop: '20px' }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#4a5568' }}>Fotografía Adjunta:</h4>
+                <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid #e2e8f0', background: '#f7fafc', display: 'flex', justifyContent: 'center' }}>
+                  <img 
+                    src={selectedEvent.photo.startsWith('data:image') ? selectedEvent.photo : `data:image/jpeg;base64,${selectedEvent.photo}`} 
+                    alt="Evidencia" 
+                    style={{ maxWidth: '100%', maxHeight: '400px', display: 'block' }} 
+                  />
+                </div>
               </div>
             )}
           </div>
