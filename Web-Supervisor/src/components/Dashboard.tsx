@@ -170,10 +170,9 @@ const Dashboard: React.FC = () => {
 
       if (unreadMsgs.length > 0) {
         // 1. Actualizar en backend
-        unreadMsgs.forEach((msg: any) => {
+        Promise.all(unreadMsgs.map((msg: any) => 
           axios.patch(`${API_URL}/mensajes/${msg.id_mensaje}`, { leido: 1 })
-            .catch(err => console.error('Error marcando mensaje:', err.response?.data || err.message));
-        });
+        )).catch(err => console.error('Error marcando mensajes:', err));
         // 2. Actualizar visualmente
         setGuardMessages(prev => prev.map((m: any) => 
           (m.emisor === 'GUARDIA' && (m.leido === 0 || m.leido === false)) ? { ...m, leido: true } : m

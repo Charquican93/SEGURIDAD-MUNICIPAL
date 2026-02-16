@@ -46,7 +46,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         }
       }
     } catch (e) {
-      console.log('No se pudo sincronizar el estado activo:', e);
+      // Fallo silencioso en sincronización de estado
     }
   };
 
@@ -64,7 +64,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         setUnreadCount(unread);
       }
     } catch (e) {
-      console.log('Error fetching messages:', e);
+      // Error al obtener mensajes
     }
   };
 
@@ -118,7 +118,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         setLogs(mappedLogs);
       }
     } catch (e) {
-      console.log('Error cargando bitácoras:', e);
+      // Error cargando bitácoras
     }
   };
 
@@ -188,7 +188,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         setRounds(mappedRounds);
       }
     } catch (e) {
-      console.log('Error cargando rondas:', e);
+      // Error cargando rondas
     }
   };
 
@@ -229,7 +229,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         }
       }
     } catch (e) {
-      console.log('Error fetching messages:', e);
+      // Error fetching messages
     }
   };
 
@@ -264,7 +264,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       if (contentType && contentType.indexOf("application/json") !== -1) {
         const data = await response.json();
         if (!response.ok) {
-          console.log('Error del servidor al guardar bitácora:', data);
           Alert.alert('Error', 'No se pudo guardar: ' + (data.error || 'Error desconocido'));
         } else {
         }
@@ -274,7 +273,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         Alert.alert('Error', 'El servidor respondió con un error inesperado (posiblemente la imagen es muy grande).');
       }
     } catch (e) {
-      console.log('Error al guardar bitácora en servidor:', e);
       Alert.alert('Error', 'Fallo de conexión al guardar bitácora');
     }
   };
@@ -294,7 +292,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         coords = { latitud: location.coords.latitude, longitud: location.coords.longitude };
       }
     } catch (error) {
-      console.log('No se pudo obtener la ubicación:', error);
+      // No se pudo obtener la ubicación
     }
 
     const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -322,7 +320,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         })
       });
     } catch (e) {
-      console.log('Error al registrar check de presencia:', e);
+      // Error al registrar check
     }
 
     setCountdown(5); // Tiempo de bloqueo
@@ -510,7 +508,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         coords = { latitud: location.coords.latitude, longitud: location.coords.longitude };
       }
     } catch (error) {
-      console.log('No se pudo obtener la ubicación:', error);
+      // No se pudo obtener la ubicación
     }
 
     // Logic to complete current round and activate next
@@ -531,7 +529,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         const result = await response.json();
         
         if (!response.ok) {
-          console.log('Error servidor marcaje:', result);
           const title = response.status === 400 ? 'Advertencia' : 'Error de Marcaje';
           const message = response.status === 400 ? (result.error || 'Punto incorrecto') : ('No se pudo guardar en BD: ' + (result.error || 'Error desconocido'));
           Alert.alert(title, message);
@@ -592,7 +589,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           }
         }
       } catch (e) {
-        console.log('Error al guardar marcaje en BD:', e);
         Alert.alert('Error', 'Fallo de conexión al guardar el marcaje.');
       }
 
@@ -1215,7 +1211,7 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
         setPoints(data);
       }
     } catch (e) {
-      console.log("Error cargando puntos:", e);
+      // Error cargando puntos
     } finally {
       if (showLoading) setLoading(false);
     }

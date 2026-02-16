@@ -51,10 +51,9 @@ const Messages: React.FC = () => {
 
       if (unreadMsgs.length > 0) {
         // 1. Actualizar en el backend
-        unreadMsgs.forEach(msg => {
+        Promise.all(unreadMsgs.map(msg => 
           axios.patch(`${API_URL}/mensajes/${msg.id_mensaje}`, { leido: 1 })
-            .catch(e => console.error('Error marcando mensaje como leído:', e));
-        });
+        )).catch(e => console.error('Error marcando mensajes como leídos:', e));
 
         // 2. Actualizar estado local para que desaparezca la notificación visualmente
         setAllMessages(prev => prev.map(m => 
