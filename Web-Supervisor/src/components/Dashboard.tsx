@@ -767,6 +767,23 @@ const Dashboard: React.FC = () => {
                         {event.date} {event.timestamp}
                       </div>
                     </td>
+                    <td style={{ padding: '10px 0', textAlign: 'right' }}>
+                      {event.photo && (
+                        <div title="Ver evidencia fotográfica" style={{ 
+                          display: 'inline-flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center',
+                          backgroundColor: '#ebf8ff', 
+                          color: '#3182ce',
+                          width: '36px', 
+                          height: '36px', 
+                          borderRadius: '50%',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                        }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -777,7 +794,7 @@ const Dashboard: React.FC = () => {
 
       {/* Modal de Perfil y Rondas del Guardia */}
       {showGuardModal && selectedGuard && (
-        <div style={{
+        <div onClick={closeGuardModal} style={{
           position: 'fixed',
           top: 0,
           left: 0,
@@ -789,7 +806,7 @@ const Dashboard: React.FC = () => {
           alignItems: 'center',
           zIndex: 1000
         }}>
-          <div style={{
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: 'white',
             padding: '30px',
             borderRadius: '12px',
@@ -1096,7 +1113,7 @@ const Dashboard: React.FC = () => {
 
       {/* Modal de Detalle y Rondas del Puesto */}
       {showPuestoModal && selectedPuesto && (
-        <div style={{
+        <div onClick={closePuestoModal} style={{
           position: 'fixed',
           top: 0,
           left: 0,
@@ -1108,7 +1125,7 @@ const Dashboard: React.FC = () => {
           alignItems: 'center',
           zIndex: 1000
         }}>
-          <div style={{
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: 'white',
             padding: '30px',
             borderRadius: '12px',
@@ -1241,11 +1258,11 @@ const Dashboard: React.FC = () => {
 
       {/* Modal de Detalle de Rondas del Día */}
       {showRoundsModal && (
-        <div style={{
+        <div onClick={() => setShowRoundsModal(false)} style={{
           position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
           backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
         }}>
-          <div style={{
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: 'white', padding: '30px', borderRadius: '12px', width: '90%', maxWidth: '900px',
             maxHeight: '85vh', overflowY: 'auto', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
           }}>
@@ -1312,11 +1329,11 @@ const Dashboard: React.FC = () => {
 
       {/* Modal de Mapa */}
       {showMapModal && mapLocation && (
-        <div style={{
+        <div onClick={() => setShowMapModal(false)} style={{
           position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
           backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000
         }}>
-          <div style={{
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: 'white', padding: '20px', borderRadius: '12px', width: '90%', maxWidth: '800px',
             height: '500px', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column'
           }}>
@@ -1350,11 +1367,11 @@ const Dashboard: React.FC = () => {
 
       {/* Modal de Detalle de Evento */}
       {showEventModal && selectedEvent && (
-        <div style={{
+        <div onClick={() => setShowEventModal(false)} style={{
           position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
           backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000
         }}>
-          <div style={{
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: 'white', padding: '30px', borderRadius: '12px', width: '90%', maxWidth: '600px',
             maxHeight: '85vh', overflowY: 'auto', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
           }}>

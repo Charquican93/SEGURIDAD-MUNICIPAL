@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Linking, Alert, Image, RefreshControl } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Header from '../components/Header';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -31,6 +32,8 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const [currentTurnId, setCurrentTurnId] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [offlineQueue, setOfflineQueue] = useState<{url: string, method: string, body: any, timestamp: number, type: string}[]>([]);
+  const [periodFilter, setPeriodFilter] = useState<'hoy' | 'semana'>('hoy');
 
   // Funciones de carga de datos extraídas para reutilización
   const fetchActiveStatus = async () => {
@@ -68,13 +71,80 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     }
   };
 
+  // Cargar cola offline al iniciar
+  useEffect(() => {
+    const loadQueue = async () => {
+      try {
+        const q = await AsyncStorage.getItem('offlineQueue');
+        if (q) setOfflineQueue(JSON.parse(q));
+      } catch (e) {}
+    };
+    loadQueue();
+  }, []);
+
+  // Guardar cola en almacenamiento
+  const persistQueue = async (newQueue: any[]) => {
+    setOfflineQueue(newQueue);
+    await AsyncStorage.setItem('offlineQueue', JSON.stringify(newQueue));
+  };
+
+  // Agregar acción a la cola
+  const queueAction = async (url: string, method: string, body: any, type: string) => {
+    const newQueue = [...offlineQueue, { url, method, body, timestamp: Date.now(), type }];
+    await persistQueue(newQueue);
+    // No mostramos alerta intrusiva, solo un log o un toast discreto sería ideal
+    console.log(`Acción guardada offline: ${type}`);
+  };
+
+  // Procesar cola (Sincronización)
+  const processQueue = async () => {
+    if (offlineQueue.length === 0) return;
+    
+    let newQueue = [...offlineQueue];
+    let processedCount = 0;
+
+    // Intentamos procesar en orden
+    for (const item of offlineQueue) {
+      try {
+        const res = await fetch(item.url, {
+          method: item.method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item.body)
+        });
+        
+        if (res.ok) {
+          newQueue = newQueue.filter(i => i.timestamp !== item.timestamp);
+          processedCount++;
+        } else {
+          // Si el servidor responde pero con error (ej: 500), decidimos si reintentar o no.
+          // Por ahora, asumimos que si hay respuesta, no es problema de conexión, pero mantenemos en cola si es crítico.
+          // Para simplificar, si falla fetch (catch) es offline. Si res.ok es false, es error lógico.
+        }
+      } catch (e) {
+        // Error de red, detenemos el procesamiento para reintentar luego
+        break;
+      }
+    }
+
+    if (processedCount > 0) {
+      await persistQueue(newQueue);
+      if (processedCount > 0) {
+        Alert.alert("Conexión Recuperada", `${processedCount} registros pendientes se han sincronizado.`);
+        onRefresh(); // Actualizar datos frescos del servidor
+      }
+    }
+  };
+
   useEffect(() => {
     fetchActiveStatus();
     fetchUnreadMessages();
     // Polling de mensajes cada 15 segundos
-    const msgInterval = setInterval(fetchUnreadMessages, 15000);
+    const msgInterval = setInterval(() => {
+      fetchUnreadMessages();
+      processQueue(); // Intentar sincronizar cola offline
+    }, 15000);
     return () => clearInterval(msgInterval);
-  }, [user.rut]);
+  }, [user.rut, offlineQueue]); // Agregamos offlineQueue para que el closure tenga el estado actualizado
 
   // Función para generar color consistente basado en el nombre
   const getAvatarColor = (name: string) => {
@@ -131,6 +201,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const [showAddModal, setShowAddModal] = useState(false);
   const [newLogDesc, setNewLogDesc] = useState('');
   const [newLogType, setNewLogType] = useState<LogEntry['type']>('NOTIFICACION');
+  const [newLogPhoto, setNewLogPhoto] = useState<string | null>(null);
   const [showObservationsModal, setShowObservationsModal] = useState(false);
   const [showPanicSuccessModal, setShowPanicSuccessModal] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
@@ -162,7 +233,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const fetchRounds = async () => {
     try {
       // Filtramos por el guardia actual Y el puesto actual para evitar mezclar rondas
-      let url = `${API_URL}/rondas?id_guardia=${user.id_guardia}`;
+      let url = `${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
       if (puesto && puesto.id_puesto) {
         url += `&id_puesto=${puesto.id_puesto}`;
       }
@@ -194,7 +265,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
   useEffect(() => {
     fetchRounds();
-  }, []);
+  }, [periodFilter]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -252,12 +323,12 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   };
 
   // Función auxiliar para guardar en el backend
-  const saveBitacora = async (tipo: string, descripcion: string) => {
+  const saveBitacora = async (tipo: string, descripcion: string, foto: string | null = null) => {
     try {
       const response = await fetch(`${API_URL}/bitacoras`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rut: user.rut, tipo, descripcion })
+        body: JSON.stringify({ rut: user.rut, tipo, descripcion, foto })
       });
 
       const contentType = response.headers.get("content-type");
@@ -273,7 +344,9 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         Alert.alert('Error', 'El servidor respondió con un error inesperado (posiblemente la imagen es muy grande).');
       }
     } catch (e) {
-      Alert.alert('Error', 'Fallo de conexión al guardar bitácora');
+      // En lugar de error, guardamos en cola
+      queueAction(`${API_URL}/bitacoras`, 'POST', { rut: user.rut, tipo, descripcion, foto }, 'Bitácora');
+      Alert.alert('Modo Offline', 'Sin conexión. El evento se guardó localmente y se enviará cuando recuperes internet.');
     }
   };
 
@@ -298,8 +371,10 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const desc = `Check de presencia realizado a las ${currentTime}`;
 
+    const tempLogId = `check-${Date.now()}`;
+
     setLogs(prevLogs => [{
-      id: `check-${Date.now()}`,
+      id: tempLogId,
       timestamp: currentTime,
       date: new Date().toLocaleDateString(),
       type: 'NOTIFICACION',
@@ -309,18 +384,31 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
     // Guardar en la nueva tabla checks_presencia
     try {
-      await fetch(`${API_URL}/checks`, {
+      const body = { 
+        id_guardia: user.id_guardia, 
+        id_puesto: puesto ? puesto.id_puesto : null,
+        latitud: coords.latitud,
+        longitud: coords.longitud
+      };
+
+      const response = await fetch(`${API_URL}/checks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          id_guardia: user.id_guardia, 
-          id_puesto: puesto ? puesto.id_puesto : null,
-          latitud: coords.latitud,
-          longitud: coords.longitud
-        })
+        body: JSON.stringify(body)
       });
+      if (!response.ok) {
+        throw new Error('Server error');
+      }
     } catch (e) {
-      // Error al registrar check
+      // Si falla la conexión, NO revertimos. Guardamos en cola.
+      queueAction(`${API_URL}/checks`, 'POST', { 
+        id_guardia: user.id_guardia, 
+        id_puesto: puesto ? puesto.id_puesto : null,
+        latitud: coords.latitud,
+        longitud: coords.longitud
+      }, 'Check Presencia');
+      
+      Alert.alert('Modo Offline', 'Check registrado localmente. Se sincronizará automáticamente.');
     }
 
     setCountdown(5); // Tiempo de bloqueo
@@ -331,29 +419,29 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     if (!isActive) {
       // Solo agregar una ronda de inicio de turno si no existe ya una para el día de hoy
       const today = new Date().toLocaleDateString();
-      let alreadyStartedToday = false;
-      setRounds(prevRounds => {
-        alreadyStartedToday = prevRounds.some(r =>
-          r.location === 'Inicio de Turno' &&
-          (r.date === today || (r.time && r.time.length === 5 && r.id.startsWith('round-')))
-        );
-        if (alreadyStartedToday) {
-          return prevRounds;
-        }
-        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const newRound: Round = {
-          id: `round-${Date.now()}`,
-          location: 'Inicio de Turno',
-          status: RoundStatus.COMPLETED,
-          time: currentTime,
-          date: today
-        };
-        return [newRound, ...prevRounds];
-      });
+      
+      // Corrección: Verificar directamente en el estado actual 'rounds'
+      const alreadyStartedToday = rounds.some(r =>
+        r.location === 'Inicio de Turno' &&
+        (r.date === today || (r.time && r.time.length === 5 && r.id.startsWith('round-')))
+      );
+
       if (alreadyStartedToday) {
         Alert.alert('Atención', 'Ya existe un inicio de turno registrado para hoy.');
         return;
       }
+
+      const tempRoundId = `round-${Date.now()}`;
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const newRound: Round = {
+        id: tempRoundId,
+        location: 'Inicio de Turno',
+        status: RoundStatus.COMPLETED,
+        time: currentTime,
+        date: today
+      };
+      setRounds(prevRounds => [newRound, ...prevRounds]);
+
       // Actualizar estado activo en backend
       try {
         // Registrar inicio de turno en tabla turnos
@@ -368,8 +456,12 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         const data = await res.json();
         if (data.success && data.id_turno) {
           setCurrentTurnId(data.id_turno);
+        } else {
+          throw new Error('Respuesta incorrecta del servidor');
         }
       } catch (e) {
+        // Revertir cambio visual si falla la red
+        setRounds(prevRounds => prevRounds.filter(r => r.id !== tempRoundId));
         Alert.alert('Error', 'No se pudo actualizar el estado del guardia en el servidor');
         return;
       }
@@ -409,14 +501,16 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       }
 
       // Agregar nueva ronda al final con la hora actual
+      const tempRoundId = `round-${Date.now()}`;
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const newRound: Round = {
-        id: `round-${Date.now()}`,
+        id: tempRoundId,
         location: 'Fin de Turno',
         status: RoundStatus.COMPLETED,
         time: currentTime,
       };
       setRounds(prevRounds => [...prevRounds, newRound]);
+
       // Actualizar estado activo en backend
       try {
         // 1. Primero cerramos el turno en la tabla turnos (para asegurar que se registre la hora)
@@ -436,6 +530,8 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           body: JSON.stringify({ rut: user.rut, activo: 0 })
         });
       } catch (e: any) {
+        // Revertir cambio visual si falla la red
+        setRounds(prevRounds => prevRounds.filter(r => r.id !== tempRoundId));
         Alert.alert('Error', `No se pudo actualizar el estado: ${e.message}`);
         return; // Detenemos la ejecución para no cambiar el estado visual si falló la red
       }
@@ -596,6 +692,23 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     }
   };
 
+  const handlePickImage = async () => {
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.5, // Calidad media para no saturar la red
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setNewLogPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo abrir la cámara.');
+    }
+  };
+
   const handleAddLog = () => {
     if (!newLogDesc.trim()) return;
 
@@ -609,8 +722,9 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     };
 
     setLogs([newEntry, ...logs]);
-    saveBitacora(newLogType, newLogDesc); // Guardar en backend
+    saveBitacora(newLogType, newLogDesc, newLogPhoto); // Guardar en backend con foto
     setNewLogDesc('');
+    setNewLogPhoto(null);
     setShowAddModal(false);
   };
 
@@ -770,6 +884,22 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#10b981']} />
         }
       >
+        {offlineQueue.length > 0 && (
+          <View className="bg-orange-50 border border-orange-200 rounded-2xl p-3 mb-4 flex-row items-center justify-between shadow-sm">
+            <View className="flex-row items-center gap-2">
+              <View className="bg-orange-100 p-1.5 rounded-full">
+                <MaterialIcons name="cloud-off" size={16} color="#ea580c" />
+              </View>
+              <Text className="text-orange-800 font-bold text-xs">
+                {offlineQueue.length} registros por sincronizar
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => processQueue()} disabled={refreshing}>
+              <Text className="text-orange-600 font-bold text-xs bg-orange-100 px-3 py-1.5 rounded-lg overflow-hidden">Sincronizar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Stats Section */}
         <View className="flex-row gap-3 mb-6">
           <View className="flex-1 bg-white p-4 rounded-2xl shadow-sm border border-slate-100 items-center justify-center">
@@ -869,11 +999,11 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
         {/* Rondas/Bitacoras List */}
         <View className="bg-white rounded-t-[40px] shadow-2xl border-t border-slate-100 -mx-4 px-6 pt-6 pb-20 min-h-[400px]">
-          <View className="flex-row items-center justify-between border-b border-slate-100 mb-6 relative">
-            <View className="flex-1 flex-row">
+          <View className="flex-row items-center justify-between border-b border-slate-100 mb-4">
+            <View className="flex-row">
               <TouchableOpacity 
                 onPress={() => setActiveTab('RONDAS')}
-                className={`flex-1 pb-4 border-b-2 items-center ${
+                className={`mr-6 pb-3 border-b-2 items-center ${
                   activeTab === 'RONDAS' 
                     ? 'border-blue-500' 
                     : 'border-transparent'
@@ -885,7 +1015,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
               </TouchableOpacity>
               <TouchableOpacity 
                 onPress={() => setActiveTab('BITACORAS')}
-                className={`flex-1 pb-4 border-b-2 items-center ${
+                className={`mr-6 pb-3 border-b-2 items-center ${
                   activeTab === 'BITACORAS' 
                     ? 'border-blue-500' 
                     : 'border-transparent'
@@ -896,13 +1026,33 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 }`}>Bitácoras</Text>
               </TouchableOpacity>
             </View>
+            
+            {activeTab === 'RONDAS' && (
+               <View className="flex-row bg-slate-100 rounded-lg p-1">
+                  <TouchableOpacity 
+                    onPress={() => setPeriodFilter('hoy')}
+                    className={`px-3 py-1 rounded-md ${periodFilter === 'hoy' ? 'bg-white shadow-sm' : ''}`}
+                  >
+                    <Text className={`text-xs font-bold ${periodFilter === 'hoy' ? 'text-slate-700' : 'text-slate-400'}`}>Hoy</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => setPeriodFilter('semana')}
+                    className={`px-3 py-1 rounded-md ${periodFilter === 'semana' ? 'bg-white shadow-sm' : ''}`}
+                  >
+                    <Text className={`text-xs font-bold ${periodFilter === 'semana' ? 'text-slate-700' : 'text-slate-400'}`}>Semana</Text>
+                  </TouchableOpacity>
+               </View>
+            )}
           </View>
 
           <View className="gap-4">
             {activeTab === 'RONDAS' ? (
-              rounds.map(round => (
-                <RoundItem key={round.id} round={round} onStart={() => handleStartRound(round.id)} />
-              ))
+              <View className="gap-4">
+                {rounds.map(round => (
+                  <RoundItem key={round.id} round={round} onStart={() => handleStartRound(round.id)} />
+                ))}
+                {rounds.length === 0 && <Text className="text-center text-slate-400 py-8">No hay rondas registradas para este periodo.</Text>}
+              </View>
             ) : (
               <View className="gap-4">
                 {logs.length > 0 ? (
@@ -1018,6 +1168,31 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                     textAlignVertical: 'top'
                   }}
                 />
+              </View>
+
+              <View>
+                <Text className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Evidencia (Opcional)</Text>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity 
+                    onPress={handlePickImage}
+                    className="bg-slate-100 p-4 rounded-xl items-center justify-center border border-slate-200 w-20 h-20"
+                  >
+                    <MaterialIcons name="camera-alt" size={24} color="#64748b" />
+                    <Text className="text-[10px] text-slate-500 mt-1">Foto</Text>
+                  </TouchableOpacity>
+                  
+                  {newLogPhoto && (
+                    <View className="relative w-20 h-20">
+                      <Image source={{ uri: newLogPhoto }} className="w-full h-full rounded-xl" />
+                      <TouchableOpacity 
+                        onPress={() => setNewLogPhoto(null)}
+                        className="absolute -top-2 -right-2 bg-red-500 rounded-full w-6 h-6 items-center justify-center border-2 border-white"
+                      >
+                        <MaterialIcons name="close" size={14} color="white" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
               </View>
 
               <TouchableOpacity 
@@ -1238,24 +1413,27 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
       case RoundStatus.COMPLETED:
         return {
           icon: 'check-circle' as const,
-          bg: 'bg-emerald-100',
+          bg: 'bg-emerald-50',
           text: 'text-emerald-600',
-          badge: null
+          bar: 'bg-emerald-500',
+          border: 'border-emerald-100'
         };
       case RoundStatus.PENDING:
         return {
           icon: 'schedule' as const,
-          bg: 'bg-blue-100',
+          bg: 'bg-blue-50',
           text: 'text-blue-600',
-          badge: null
+          bar: 'bg-blue-500',
+          border: 'border-blue-100'
         };
       case RoundStatus.SCHEDULED:
       default:
         return {
           icon: 'lock-clock' as const,
-          bg: 'bg-slate-100',
+          bg: 'bg-slate-50',
           text: 'text-slate-400',
-          badge: null
+          bar: 'bg-slate-300',
+          border: 'border-slate-100'
         };
     }
   };
@@ -1272,28 +1450,56 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
     statusText = "EN PROGRESO";
   }
 
+  // @ts-ignore
+  const totalPoints = round.totalPoints || 0;
+  // @ts-ignore
+  const markedPoints = round.markedPoints || 0;
+  const progressPercent = totalPoints > 0 ? (markedPoints / totalPoints) * 100 : 0;
+
   return (
     <TouchableOpacity 
       onPress={toggleExpand}
-      activeOpacity={0.7}
-      className={`p-4 rounded-3xl border border-slate-50 bg-slate-50/50 ${round.status === RoundStatus.SCHEDULED ? 'opacity-60' : ''}`}
+      activeOpacity={0.9}
+      className={`p-5 rounded-[24px] bg-white shadow-sm border border-slate-100 mb-3 ${round.status === RoundStatus.SCHEDULED ? 'opacity-70' : ''}`}
     >
-      <View className="flex-row items-center">
-        <View className={`w-12 h-12 rounded-full ${config.bg} items-center justify-center`}>
-          <MaterialIcons name={config.icon} size={24} color={config.text.includes('slate') ? '#94a3b8' : config.text.includes('emerald') ? '#059669' : '#2563eb'} />
+      <View className="flex-row justify-between items-start mb-4">
+        <View className="flex-row items-center gap-3 flex-1 mr-2">
+          <View className={`w-10 h-10 rounded-2xl ${config.bg} items-center justify-center`}>
+            <MaterialIcons name={config.icon} size={20} color={config.text.includes('slate') ? '#94a3b8' : config.text.includes('emerald') ? '#059669' : '#2563eb'} />
+          </View>
+          <View className="flex-1">
+            <Text className="text-base font-bold text-slate-800 leading-tight" numberOfLines={1}>{round.location}</Text>
+            <Text className="text-xs text-slate-400 font-medium mt-0.5">
+              {round.time} {round.completedTime ? `→ ${round.completedTime}` : ''}
+            </Text>
+          </View>
         </View>
-        <View className="ml-4 flex-1">
-          <Text className="text-sm font-bold text-slate-800">{round.location}</Text>
-          <Text className="text-[11px] font-medium text-slate-500 mt-0.5">
-            {statusText} • {round.completedTime ? `${round.time} → ${round.completedTime}` : round.time}
-            {/* @ts-ignore */}
-            {(round.totalPoints > 0) && ` • Progreso: ${round.markedPoints || 0}/${round.totalPoints}`}
-          </Text>
+        
+        <View className={`px-2.5 py-1 rounded-full ${config.bg}`}>
+           <Text className={`text-[10px] font-bold ${config.text}`}>{statusText}</Text>
         </View>
-        {!isLocalRound && (
-          <MaterialIcons name={expanded ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={24} color="#cbd5e1" />
-        )}
       </View>
+
+      {!isLocalRound && totalPoints > 0 && (
+        <View className="mb-3">
+          <View className="flex-row justify-between mb-1.5">
+            <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Progreso</Text>
+            <Text className="text-[10px] font-bold text-slate-600">{markedPoints}/{totalPoints}</Text>
+          </View>
+          <View className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <View 
+              className={`h-full rounded-full ${config.bar}`} 
+              style={{ width: `${progressPercent}%` }} 
+            />
+          </View>
+        </View>
+      )}
+
+      {!isLocalRound && (
+         <View className="items-center -mb-2">
+            <MaterialIcons name={expanded ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={20} color="#e2e8f0" />
+         </View>
+      )}
 
       {expanded && (
         <View className="mt-4 pt-4 border-t border-slate-200">
@@ -1301,25 +1507,24 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
             <Text className="text-center text-slate-400 text-xs py-2">Cargando puntos...</Text>
           ) : (
             <View className="gap-2">
-              <Text className="text-xs font-bold text-slate-500 mb-2 pl-1">Puntos de: {round.location}</Text>
               {points.map((point, index) => (
-                <View key={index} className="flex-row items-center justify-between bg-white p-3 rounded-xl border border-slate-100">
+                <View key={index} className="flex-row items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
                   <View className="flex-row items-center gap-3 flex-1">
                     <View className={`w-2 h-2 rounded-full ${point.marcado ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                    <View>
-                      <Text className="text-xs font-bold text-slate-700">{point.nombre}</Text>
+                    <View className="flex-1">
+                      <Text className={`text-xs font-bold ${point.marcado ? 'text-slate-700' : 'text-slate-500'}`}>{point.nombre}</Text>
                       {point.descripcion ? <Text className="text-[10px] text-slate-400" numberOfLines={1}>{point.descripcion}</Text> : null}
                     </View>
                   </View>
                   {point.marcado ? (
-                    <View className="flex-row items-center gap-1">
-                      <MaterialIcons name="check-circle" size={14} color="#10b981" />
+                    <View className="flex-row items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-100">
+                      <MaterialIcons name="check-circle" size={12} color="#10b981" />
                       <Text className="text-[10px] font-medium text-emerald-600">
                         {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </Text>
                     </View>
                   ) : (
-                    <Text className="text-[10px] font-medium text-slate-400">Pendiente</Text>
+                    <Text className="text-[10px] font-medium text-slate-400 italic">Pendiente</Text>
                   )}
                 </View>
               ))}
