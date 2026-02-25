@@ -36,7 +36,7 @@ const obtenerTurnos = async (req, res) => {
         (SELECT MAX(hora_fin) FROM rondas r 
          WHERE r.fecha = t.fecha AND r.id_guardia = t.id_guardia) as hora_fin_programada
       FROM turnos t
-      JOIN guardias g ON t.id_guardia = g.id_guardia
+      LEFT JOIN guardias g ON t.id_guardia = g.id_guardia
       LEFT JOIN puestos p ON t.id_puesto = p.id_puesto
       WHERE 1=1
     `;

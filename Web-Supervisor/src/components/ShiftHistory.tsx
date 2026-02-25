@@ -13,13 +13,44 @@ const ShiftHistory: React.FC = () => {
   const fetchShifts = async () => {
     setLoading(true);
     try {
-      // Asumimos que el backend soporta filtros por fecha
+      const params: any = {
+        estado: statusFilter,
+        search: guardFilter
+      };
+
+      // Calcular fechas en el cliente (navegador) para evitar desajustes de zona horaria con Railway (UTC)
+      const now = new Date();
+      const formatDate = (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+
+      if (period === 'hoy') {
+        params.fecha_inicio = formatDate(now);
+        params.fecha_fin = formatDate(now);
+      } else if (period === 'ayer') {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        params.fecha_inicio = formatDate(yesterday);
+        params.fecha_fin = formatDate(yesterday);
+      } else if (period === 'semana') {
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        params.fecha_inicio = formatDate(weekAgo);
+        params.fecha_fin = formatDate(now);
+      } else if (period === 'mes') {
+        const monthAgo = new Date(now);
+        monthAgo.setDate(monthAgo.getDate() - 30);
+        params.fecha_inicio = formatDate(monthAgo);
+        params.fecha_fin = formatDate(now);
+      } else {
+        params.periodo = period; // 'todos'
+      }
+
       const response = await axios.get(`${API_URL}/turnos`, {
-        params: {
-          periodo: period,
-          estado: statusFilter,
-          search: guardFilter
-        }
+        params
       });
       if (Array.isArray(response.data)) {
         setShifts(response.data);
