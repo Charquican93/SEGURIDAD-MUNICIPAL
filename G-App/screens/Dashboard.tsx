@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Linking, Alert, Image, RefreshControl } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Image, RefreshControl, Animated, Pressable, StyleSheet, TouchableWithoutFeedback } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Header from '../components/Header';
@@ -9,6 +9,68 @@ import * as Location from 'expo-location';
 import { Round, RoundStatus, UserProfile, TabType, LogEntry } from '../types';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { API_URL } from '../config';
+import { useTheme } from '../context/ThemeContext'; // Asegúrate de crear este archivo primero
+
+// Componente de Botón "Mantener para Activar" (Hold-to-Act)
+const HoldButton = ({ 
+  onActivate, 
+  duration = 1000, 
+  children, 
+  className = "", 
+  fillColor = "rgba(0,0,0,0.2)",
+  disabled = false,
+  style = {}
+}: any) => {
+  const progress = useRef(new Animated.Value(0)).current;
+  
+  const handlePressIn = () => {
+    if (disabled) return;
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: duration,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        onActivate();
+        progress.setValue(0);
+      }
+    });
+  };
+
+  const handlePressOut = () => {
+    if (disabled) return;
+    Animated.timing(progress, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: false,
+    }).start();
+  };
+
+  const width = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%']
+  });
+
+  return (
+    <Pressable
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      className={`relative overflow-hidden ${className}`}
+      style={style}
+      disabled={disabled}
+    >
+      <Animated.View 
+        style={[
+          StyleSheet.absoluteFill, 
+          { backgroundColor: fillColor, width: width, zIndex: 0 }
+        ]} 
+      />
+      <View className="z-10 w-full h-full">
+        {children}
+      </View>
+    </Pressable>
+  );
+};
 
 const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; onStartTurn?: () => void }) => {
   const route = useRoute();
@@ -16,7 +78,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   // @ts-ignore
   const user: UserProfile | undefined = route.params?.user;
   // @ts-ignore
-  const puesto: any | undefined = route.params?.puesto;
+  const [puesto, setPuesto] = useState<any | undefined>(route.params?.puesto);
   if (!user) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
@@ -25,6 +87,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       </View>
     );
   }
+  const { theme, toggleTheme, isDark } = useTheme(); // Hook del tema
   const [activeTab, setActiveTab] = useState<TabType>('RONDAS');
   const [showProfileModal, setShowProfileModal] = useState(false);
   // Estado local para reflejar el estado activo del usuario en la UI
@@ -34,11 +97,75 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const [unreadCount, setUnreadCount] = useState(0);
   const [offlineQueue, setOfflineQueue] = useState<{url: string, method: string, body: any, timestamp: number, type: string}[]>([]);
   const [periodFilter, setPeriodFilter] = useState<'hoy' | 'semana'>('hoy');
+  const [debugTapCount, setDebugTapCount] = useState(0);
+
+  // Función para manejar cierre de sesión forzado por token inválido/expirado
+  const handleSessionExpiry = async () => {
+    try {
+      await AsyncStorage.removeItem('userSession');
+      Alert.alert('Sesión Caducada', 'Tus credenciales ya no son válidas. Por favor inicia sesión nuevamente.');
+      // @ts-ignore
+      navigation.replace('Login');
+    } catch (e) {
+      console.error('Error al limpiar sesión:', e);
+    }
+  };
+
+  // Nueva función de Reset de Emergencia (Solución para turno fantasma)
+  const handleEmergencyReset = async () => {
+    Alert.alert(
+      "Restablecer Estado",
+      "Esto forzará el cierre de cualquier turno activo y limpiará los datos locales. Úsalo si la App quedó pegada con un turno fantasma.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Restablecer", 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              // INTENTO ADICIONAL: Si la App tiene un ID de turno en memoria, intentamos cerrarlo formalmente en BD
+              if (currentTurnId) {
+                 try {
+                   await fetch(`${API_URL}/turnos/${currentTurnId}`, { method: 'PATCH' });
+                 } catch(e) { console.log("No se pudo cerrar el turno por ID específico, continuando con reset general."); }
+              }
+
+              // 1. Forzar inactividad en backend
+              await fetch(`${API_URL}/guardias/activo`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rut: user.rut, activo: 0 })
+              });
+              
+              // 2. Limpiar estado local
+              setIsActive(false);
+              setCurrentTurnId(null);
+              setRounds([]);
+              
+              // 3. Intentar recuperar el puesto actualizado
+              fetchProfileUpdate();
+              
+              Alert.alert("Listo", "El estado ha sido restablecido. Desliza hacia abajo para actualizar.");
+            } catch (e) {
+              Alert.alert("Error de Conexión", "Se forzará el reset localmente.");
+              setIsActive(false);
+              setCurrentTurnId(null);
+              setRounds([]);
+            }
+          }
+        }
+      ]
+    );
+  };
 
   // Funciones de carga de datos extraídas para reutilización
   const fetchActiveStatus = async () => {
     try {
       const res = await fetch(`${API_URL}/guardias/estado?rut=${user.rut}`);
+      if (res.status === 401 || res.status === 403) {
+        handleSessionExpiry();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         if (typeof data.activo !== 'undefined') {
@@ -53,10 +180,91 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     }
   };
 
+  // NUEVA FUNCIÓN: Actualizar información del puesto/perfil desde el servidor
+  const fetchProfileUpdate = async () => {
+    if (!user) return;
+    try {
+      // 1. Consultar estado actual (Turno activo tiene prioridad)
+      const statusRes = await fetch(`${API_URL}/guardias/estado?rut=${user.rut}`);
+      if (statusRes.status === 401 || statusRes.status === 403) {
+        handleSessionExpiry();
+        return;
+      }
+      
+      let isActiveOnServer = false;
+
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        isActiveOnServer = !!statusData.activo;
+        
+        // Si hay turno activo y trae info de puesto, actualizamos
+        if (statusData.activo && statusData.id_turno && statusData.puesto) {
+           setPuesto(statusData.puesto);
+           return; 
+        }
+        
+        // PROTECCIÓN: Si está activo pero el endpoint no trajo el objeto puesto (posible limitación del backend),
+        // y ya tenemos un puesto localmente (del Login), NO lo borramos. Mantenemos el actual.
+        if (statusData.activo && puesto) {
+            return;
+        }
+      }
+
+      // 2. Si no hay turno activo, consultamos el perfil del guardia por si se le asignó puesto fijo recientemente
+      const guardRes = await fetch(`${API_URL}/guardias/${user.id_guardia}`);
+      if (guardRes.ok) {
+        const guardData = await guardRes.json();
+        if (guardData.id_puesto) {
+           // Si tiene ID de puesto, traemos el objeto completo si no lo tenemos o es diferente
+           if (!puesto || puesto.id_puesto !== guardData.id_puesto) {
+              const puestoRes = await fetch(`${API_URL}/puestos/${guardData.id_puesto}`);
+              if (puestoRes.ok) {
+                const puestoData = await puestoRes.json();
+                setPuesto(puestoData);
+              }
+           }
+        } else {
+           // 3. (CORRECCIÓN) Si no tiene puesto fijo, buscamos en las rondas de HOY (Asignación por Planificación)
+           const roundsRes = await fetch(`${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=hoy`);
+           let foundInRounds = false;
+           if (roundsRes.ok) {
+              const roundsData = await roundsRes.json();
+              // Buscamos el primer id_puesto válido en las rondas (o id_ruta si se usa como puesto)
+              const roundWithPuesto = roundsData.find((r: any) => r.id_puesto || r.id_ruta);
+              if (roundWithPuesto) {
+                 const targetId = roundWithPuesto.id_puesto || roundWithPuesto.id_ruta;
+                 // Solo hacemos fetch si no tenemos puesto o es diferente al encontrado
+                 if (!puesto || puesto.id_puesto !== targetId) {
+                     const puestoRes = await fetch(`${API_URL}/puestos/${targetId}`);
+                     if (puestoRes.ok) {
+                       const puestoData = await puestoRes.json();
+                       setPuesto(puestoData);
+                       foundInRounds = true;
+                     }
+                 } else {
+                     foundInRounds = true; // Ya tenemos el puesto correcto cargado
+                 }
+              }
+           }
+           
+           // Solo si no tiene puesto fijo NI rondas con puesto, Y NO ESTÁ ACTIVO, limpiamos.
+           // Si está activo, preferimos mantener el puesto "viejo" a dejarlo sin nada.
+           if (!foundInRounds && puesto && !isActiveOnServer) setPuesto(undefined);
+        }
+      }
+    } catch (e) {
+      console.log("Error actualizando perfil:", e);
+    }
+  };
+
   // Función para contar mensajes no leídos
   const fetchUnreadMessages = async () => {
     try {
       const res = await fetch(`${API_URL}/mensajes?id_guardia=${user.id_guardia}`);
+      if (res.status === 401 || res.status === 403) {
+        handleSessionExpiry();
+        return;
+      }
       if (res.ok) {
         const msgs = await res.json();
         // Filtrado robusto: considera no leído si es 0, false, null o "0"
@@ -138,6 +346,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   useEffect(() => {
     fetchActiveStatus();
     fetchUnreadMessages();
+    fetchProfileUpdate(); // Intentar actualizar puesto al cargar
     // Polling de mensajes cada 15 segundos
     const msgInterval = setInterval(() => {
       fetchUnreadMessages();
@@ -233,16 +442,25 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const fetchRounds = async () => {
     try {
       // Filtramos por el guardia actual Y el puesto actual para evitar mezclar rondas
-      let url = `${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
+      let roundsUrl = `${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
       if (puesto && puesto.id_puesto) {
-        url += `&id_puesto=${puesto.id_puesto}`;
+        roundsUrl += `&id_puesto=${puesto.id_puesto}`;
       }
       
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
+      // También traemos el historial de turnos para intercalar los eventos de Inicio/Fin
+      const turnsUrl = `${API_URL}/turnos?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
+
+      const [resRounds, resTurns] = await Promise.all([
+        fetch(roundsUrl),
+        fetch(turnsUrl)
+      ]);
+
+      let combinedItems: Round[] = [];
+
+      if (resRounds.ok) {
+        const dataRounds = await resRounds.json();
         // Mapear los datos de la BD al formato de la App
-        const mappedRounds = data.map((r: any) => ({
+        const mappedRounds = dataRounds.map((r: any) => ({
           id: r.id_ronda.toString(),
           // Usamos el nombre de la ruta que trajimos con el JOIN
           location: r.nombre_ruta || `Ruta ${r.id_ruta}`,
@@ -256,8 +474,49 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           // @ts-ignore
           markedPoints: r.puntos_marcados || 0
         }));
-        setRounds(mappedRounds);
+        combinedItems = [...mappedRounds];
       }
+
+      if (resTurns.ok) {
+        const dataTurns = await resTurns.json();
+        if (Array.isArray(dataTurns)) {
+          dataTurns.forEach((t: any) => {
+            // Evento: Inicio de Turno
+            if (t.hora_inicio) {
+              combinedItems.push({
+                id: `turn-start-${t.id_turno}`,
+                location: 'Inicio de Turno',
+                status: RoundStatus.COMPLETED,
+                time: t.hora_inicio.substring(0, 5),
+                date: t.fecha
+              });
+            }
+            // Evento: Fin de Turno
+            if (t.hora_fin) {
+              combinedItems.push({
+                id: `turn-end-${t.id_turno}`,
+                location: 'Fin de Turno',
+                status: RoundStatus.COMPLETED,
+                time: t.hora_fin.substring(0, 5),
+                date: t.fecha
+              });
+            }
+          });
+        }
+      }
+
+      // Ordenar cronológicamente todo junto
+      combinedItems.sort((a, b) => {
+        // 1. Por fecha (si estamos viendo semana/mes)
+        const dateA = a.date ? new Date(a.date).getTime() : 0;
+        const dateB = b.date ? new Date(b.date).getTime() : 0;
+        if (dateA !== dateB) return dateA - dateB;
+        
+        // 2. Por hora
+        return a.time.localeCompare(b.time);
+      });
+
+      setRounds(combinedItems);
     } catch (e) {
       // Error cargando rondas
     }
@@ -269,7 +528,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchActiveStatus(), fetchRounds(), fetchLogs(), fetchUnreadMessages()]);
+    await Promise.all([fetchActiveStatus(), fetchRounds(), fetchLogs(), fetchUnreadMessages(), fetchProfileUpdate()]);
     setRefreshing(false);
   };
 
@@ -368,7 +627,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       // No se pudo obtener la ubicación
     }
 
-    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const desc = `Check de presencia realizado a las ${currentTime}`;
 
     const tempLogId = `check-${Date.now()}`;
@@ -417,30 +676,37 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
   const handleStartTurn = async () => {
     if (!isActive) {
-      // Solo agregar una ronda de inicio de turno si no existe ya una para el día de hoy
-      const today = new Date().toLocaleDateString();
+      // --- VALIDACIÓN DE HORARIO (NO BLOQUEANTE) ---
+      let timeStatus = "A tiempo";
+      const now = new Date();
       
-      // Corrección: Verificar directamente en el estado actual 'rounds'
-      const alreadyStartedToday = rounds.some(r =>
-        r.location === 'Inicio de Turno' &&
-        (r.date === today || (r.time && r.time.length === 5 && r.id.startsWith('round-')))
-      );
+      // Buscamos la primera ronda programada para hoy
+      const pendingRoundsToday = rounds.filter(r => {
+        if (r.status !== RoundStatus.PENDING) return false;
+        if (r.location === 'Inicio de Turno' || r.location === 'Fin de Turno') return false;
+        // Validación simple de fecha si existe
+        if (r.date) {
+           const datePart = r.date.toString().split('T')[0];
+           const [y, m, d] = datePart.split('-').map(Number);
+           if (y && m && d) return y === now.getFullYear() && m === (now.getMonth() + 1) && d === now.getDate();
+        }
+        return true;
+      }).sort((a, b) => a.time.localeCompare(b.time));
 
-      if (alreadyStartedToday) {
-        Alert.alert('Atención', 'Ya existe un inicio de turno registrado para hoy.');
-        return;
+      if (pendingRoundsToday.length > 0) {
+        const firstRound = pendingRoundsToday[0];
+        const [hours, minutes] = firstRound.time.split(':').map(Number);
+        const scheduleTime = new Date();
+        scheduleTime.setHours(hours, minutes, 0, 0);
+
+        const diffMinutes = (now.getTime() - scheduleTime.getTime()) / 60000;
+
+        if (diffMinutes > 10) timeStatus = "ATRASADO";
+        else if (diffMinutes < -10) timeStatus = "ANTICIPADO";
       }
 
-      const tempRoundId = `round-${Date.now()}`;
-      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const newRound: Round = {
-        id: tempRoundId,
-        location: 'Inicio de Turno',
-        status: RoundStatus.COMPLETED,
-        time: currentTime,
-        date: today
-      };
-      setRounds(prevRounds => [newRound, ...prevRounds]);
+      const today = new Date().toLocaleDateString();
+
 
       // Actualizar estado activo en backend
       try {
@@ -457,11 +723,15 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         if (data.success && data.id_turno) {
           setCurrentTurnId(data.id_turno);
         } else {
-          throw new Error('Respuesta incorrecta del servidor');
+          // Si falla la respuesta pero no es error de red, seguimos activos localmente
+          console.warn('Respuesta servidor turno:', data);
+        }
+        
+        if (timeStatus === "ATRASADO") {
+          Alert.alert("Turno Iniciado", "Atención: Has iniciado turno fuera del margen de 10 minutos (Atrasado). Se ha registrado la incidencia.");
         }
       } catch (e) {
         // Revertir cambio visual si falla la red
-        setRounds(prevRounds => prevRounds.filter(r => r.id !== tempRoundId));
         Alert.alert('Error', 'No se pudo actualizar el estado del guardia en el servidor');
         return;
       }
@@ -471,12 +741,25 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
       } else if (onToggleTurn) {
         onToggleTurn();
       }
+      fetchRounds(); // Recargar lista para mostrar el nuevo inicio desde el servidor
       setIsActive(true); // Cambia el estado local inmediatamente
     }
   };
 
-  const handleEndTurn = async () => {
-    if (isActive) {
+  // Calcular rondas completadas hoy (excluyendo inicio/fin de turno y rondas locales de UI)
+  const completedRoundsCount = rounds.filter(r => 
+    r.status === RoundStatus.COMPLETED && 
+    r.location !== 'Inicio de Turno' && 
+    r.location !== 'Fin de Turno'
+  ).length;
+
+  // Calcular total de rondas asignadas (excluyendo marcadores)
+  const totalRoundsCount = rounds.filter(r => 
+    r.location !== 'Inicio de Turno' && 
+    r.location !== 'Fin de Turno'
+  ).length;
+
+  const processEndTurn = async () => {
       // Intentamos asegurar que tenemos el ID del turno
       let turnId = currentTurnId;
       
@@ -500,16 +783,6 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         return;
       }
 
-      // Agregar nueva ronda al final con la hora actual
-      const tempRoundId = `round-${Date.now()}`;
-      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const newRound: Round = {
-        id: tempRoundId,
-        location: 'Fin de Turno',
-        status: RoundStatus.COMPLETED,
-        time: currentTime,
-      };
-      setRounds(prevRounds => [...prevRounds, newRound]);
 
       // Actualizar estado activo en backend
       try {
@@ -519,8 +792,13 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         });
         
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || "Error al cerrar turno en base de datos");
+            // Si el turno no existe (404) porque se borró la BD, permitimos cerrar localmente
+            if (response.status === 404) {
+              console.warn("Turno no encontrado (404), forzando cierre local.");
+            } else {
+              const errorData = await response.json();
+              throw new Error(errorData.error || "Error al cerrar turno en base de datos");
+            }
         }
 
         // 2. Luego desactivamos al guardia
@@ -531,14 +809,31 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         });
       } catch (e: any) {
         // Revertir cambio visual si falla la red
-        setRounds(prevRounds => prevRounds.filter(r => r.id !== tempRoundId));
         Alert.alert('Error', `No se pudo actualizar el estado: ${e.message}`);
         return; // Detenemos la ejecución para no cambiar el estado visual si falló la red
       }
       // Llamar a la función para cambiar el estado del usuario
       if (onToggleTurn) onToggleTurn();
+      fetchRounds(); // Recargar lista para mostrar el cierre desde el servidor
       setIsActive(false); // Cambia el estado local inmediatamente
       setCurrentTurnId(null); // Limpiamos el ID del turno actual
+  };
+
+  const handleEndTurn = async () => {
+    if (isActive) {
+      // VALIDACIÓN: Rondas pendientes (Advertencia)
+      if (completedRoundsCount < totalRoundsCount) {
+        Alert.alert(
+          "Rondas Pendientes",
+          `Tienes rondas sin completar (${completedRoundsCount}/${totalRoundsCount}).\n\n¿Deseas terminar el turno de todas formas?`,
+          [
+            { text: "Cancelar", style: "cancel" },
+            { text: "Terminar Turno", style: "destructive", onPress: () => processEndTurn() }
+          ]
+        );
+        return;
+      }
+      await processEndTurn();
     }
   };
 
@@ -565,21 +860,23 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     
     const pendingRound = rounds.find(round => round.status === RoundStatus.PENDING);
     if (pendingRound) {
-      // --- VALIDACIÓN DE HORA ---
+      // --- CÁLCULO DE TIEMPO (NO BLOQUEANTE) ---
       const now = new Date();
       const [hours, minutes] = pendingRound.time.split(':').map(Number);
-      const roundTime = new Date();
+      
+      let roundTime = new Date();
+      if (pendingRound.date) {
+        const roundDate = new Date(pendingRound.date);
+        if (!isNaN(roundDate.getTime())) roundTime = roundDate;
+      }
       roundTime.setHours(hours, minutes, 0, 0);
 
-      // Diferencia en minutos entre ahora y la hora de la ronda
       const diffMinutes = (now.getTime() - roundTime.getTime()) / 60000;
 
-      // Ejemplo: No permitir marcar si faltan más de 30 minutos (diff < -30)
-      if (diffMinutes < -30) {
-        Alert.alert("Muy temprano", `Esta ronda está programada para las ${pendingRound.time}. Podrás iniciarla 30 minutos antes.`);
-        return;
+      // Solo advertimos si es muy temprano, pero permitimos marcar
+      if (diffMinutes < -15) {
+        Alert.alert("Aviso", `Estás iniciando la ronda ${Math.abs(Math.round(diffMinutes))} minutos antes de lo programado.`);
       }
-      // --------------------------
 
       await handleStartRound(pendingRound.id);
     } else {
@@ -629,8 +926,34 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           const message = response.status === 400 ? (result.error || 'Punto incorrecto') : ('No se pudo guardar en BD: ' + (result.error || 'Error desconocido'));
           Alert.alert(title, message);
         } else {
+          // --- CÁLCULO PROPORCIONAL DE TIEMPO ENTRE PUNTOS ---
+          let timingMsg = "";
+          const currentRound = rounds.find(r => r.id === activeRoundId);
+          
+          if (currentRound && result.progress) {
+            const [h, m] = currentRound.time.split(':').map(Number);
+            const roundStart = new Date();
+            roundStart.setHours(h, m, 0, 0);
+            
+            // Asumimos una duración estándar de ronda de 60 min si no hay info, o calculamos proporcional
+            // Tiempo estimado por punto = 60 min / total puntos
+            const totalPoints = result.progress.total || 1;
+            const intervalPerPoint = 60 / totalPoints; 
+            
+            // El tiempo esperado para ESTE punto es: Inicio Ronda + ( (PuntoActual - 1) * Intervalo )
+            const pointIndex = result.progress.current; // 1, 2, 3...
+            const expectedMinutesOffset = (pointIndex - 1) * intervalPerPoint;
+            const expectedTime = new Date(roundStart.getTime() + expectedMinutesOffset * 60000);
+            
+            const diff = (new Date().getTime() - expectedTime.getTime()) / 60000;
+            
+            if (diff > 10) timingMsg = "\n(Marcaje Atrasado)";
+            else if (diff < -10) timingMsg = "\n(Marcaje Anticipado)";
+          }
+          // ---------------------------------------------------
+
           if (result.roundCompleted) {
-            Alert.alert("¡Ronda Completada!", "Has recorrido todos los puntos de control.");
+            Alert.alert("¡Ronda Completada!", `Has recorrido todos los puntos de control.${timingMsg}`);
             
             // Actualizar UI localmente solo si el servidor confirma que se completó
             setRounds(prevRounds => {
@@ -641,7 +964,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 newRounds[currentIndex] = {
                   ...newRounds[currentIndex],
                   status: RoundStatus.COMPLETED,
-                  completedTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  completedTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
                   // @ts-ignore
                   markedPoints: result.progress?.total || 0,
                   // @ts-ignore
@@ -665,7 +988,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           } else {
             // Ronda aún en progreso
             const progressText = result.progress ? `(${result.progress.current}/${result.progress.total})` : '';
-            Alert.alert("Punto Registrado", `Marcaje correcto. Continúa con los siguientes puntos. ${progressText}`);
+            Alert.alert("Punto Registrado", `Marcaje correcto.${timingMsg}\nContinúa con los siguientes puntos. ${progressText}`);
             
             // Actualizar progreso visualmente
             setRounds(prevRounds => {
@@ -714,7 +1037,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
     const newEntry: LogEntry = {
       id: `log-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
       date: new Date().toLocaleDateString(),
       type: newLogType,
       description: newLogDesc,
@@ -731,7 +1054,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   const handleNoObservations = () => {
     const newEntry: LogEntry = {
       id: `log-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
       date: new Date().toLocaleDateString(),
       type: 'OBSERVACION',
       description: 'Sin observaciones',
@@ -748,6 +1071,42 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
     setShowAddModal(true);
   };
 
+  // Lógica directa de pánico (sin alerta de confirmación previa, ya que el HoldButton actúa como confirmación)
+  const executePanicAlert = async () => {
+    try {
+      // 1. Obtener permisos y ubicación
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación para enviar la alerta.');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High, // Pedir la máxima precisión
+      });
+      const { latitude, longitude } = location.coords;
+
+      // 2. Enviar datos al backend
+      const response = await fetch(`${API_URL}/panic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_guardia: user.id_guardia, id_puesto: puesto?.id_puesto, latitud: latitude, longitud: longitude }),
+      });
+
+      if (response.ok) {
+        setShowPanicSuccessModal(true);
+      } else {
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Error desconocido del servidor');
+        } else {
+            throw new Error('El servidor respondió con un error inesperado.');
+        }
+      }
+    } catch (error: any) { Alert.alert("Error", `No se pudo enviar la alerta: ${error.message}`); }
+  };
+
   const handlePanicButton = async () => {
     Alert.alert(
       "Confirmar Alerta de Pánico",
@@ -759,43 +1118,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         },
         {
           text: "Enviar Alerta",
-          onPress: async () => {
-            try {
-              // 1. Obtener permisos y ubicación
-              const { status } = await Location.requestForegroundPermissionsAsync();
-              if (status !== 'granted') {
-                Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación para enviar la alerta.');
-                return;
-              }
-
-              const location = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.High, // Pedir la máxima precisión
-              });
-              const { latitude, longitude } = location.coords;
-
-              // 2. Enviar datos al backend
-              const response = await fetch(`${API_URL}/panic`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id_guardia: user.id_guardia, id_puesto: puesto?.id_puesto, latitud: latitude, longitud: longitude }),
-              });
-
-              if (response.ok) {
-                setShowPanicSuccessModal(true);
-              } else {
-                // Manejo de error mejorado para evitar el crash por parseo de JSON
-                const contentType = response.headers.get("content-type");
-                if (contentType && contentType.indexOf("application/json") !== -1) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Error desconocido del servidor');
-                } else {
-                    const errorText = await response.text();
-                    console.error("Respuesta no-JSON del servidor:", errorText); // Log del HTML para depuración
-                    throw new Error('El servidor respondió con un error inesperado. Contacte a soporte.');
-                }
-              }
-            } catch (error: any) { Alert.alert("Error", `No se pudo enviar la alerta: ${error.message}`); }
-          },
+          onPress: executePanicAlert,
           style: "destructive"
         }
       ]
@@ -803,7 +1126,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
   };
 
   return (
-    <View className="flex-1">
+    <View className={`flex-1 ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`}>
       <Header
         user={{
           ...user,
@@ -819,26 +1142,35 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         animationType="slide"
         transparent={true}
         visible={showProfileModal}
-        onRequestClose={() => setShowProfileModal(false)}
+        onRequestClose={() => { setShowProfileModal(false); setDebugTapCount(0); }}
       >
-        <View className="flex-1 justify-center items-center bg-black/60 p-6">
-          <View className="w-full max-w-md bg-white rounded-3xl p-8 shadow-2xl items-center">
-            <Image
-              source={{ uri: avatarUrl }}
-              className="w-24 h-24 rounded-full mb-4 border-4 border-emerald-500"
-            />
-            <Text className="text-xl font-bold text-slate-900 mb-2 text-center">{user.nombre} {user.apellido}</Text>
+        <View className="flex-1 justify-center items-center bg-black/80 p-6">
+          <View className={`w-full max-w-md rounded-3xl p-8 shadow-2xl items-center ${isDark ? 'bg-slate-800' : 'bg-white'}`}>
+            <TouchableWithoutFeedback onPress={() => setDebugTapCount(prev => prev + 1)}>
+              <Image
+                source={{ uri: avatarUrl }}
+                className="w-24 h-24 rounded-full mb-4 border-4 border-emerald-500"
+              />
+            </TouchableWithoutFeedback>
+            <Text className={`text-xl font-bold mb-2 text-center ${isDark ? 'text-white' : 'text-slate-900'}`}>{user.nombre} {user.apellido}</Text>
             <Text className="text-sm text-slate-500 mb-4 text-center">{user.role || 'Guardia'}</Text>
+            
+            {/* Toggle de Tema en el Perfil */}
+            <TouchableOpacity 
+              onPress={toggleTheme}
+              className={`flex-row items-center gap-2 px-4 py-2 rounded-full mb-6 ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
+            >
+              <MaterialIcons name={isDark ? "light-mode" : "dark-mode"} size={20} color={isDark ? "#fbbf24" : "#64748b"} />
+              <Text className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>{isDark ? 'Modo Claro' : 'Modo Oscuro'}</Text>
+            </TouchableOpacity>
+
             <View className="w-full gap-3 mb-4">
-              <Text className="text-sm text-slate-700"><Text className="font-bold">RUT:</Text> {user.rut}</Text>
-              <Text className="text-sm text-slate-700"><Text className="font-bold">Teléfono:</Text> {user.telefono}</Text>
-              <Text className="text-sm text-slate-700"><Text className="font-bold">Correo:</Text> {user.correo}</Text>
-              <Text className="text-sm text-slate-700"><Text className="font-bold">Puesto:</Text> {puesto ? puesto.puesto : 'No seleccionado'}</Text>
-              <Text className="text-sm text-slate-700"><Text className="font-bold">Instalación:</Text> {puesto ? puesto.instalaciones : 'No seleccionada'}</Text>
+              <Text className={`text-sm ${isDark ? 'text-slate-300' : 'text-slate-700'}`}><Text className="font-bold">RUT:</Text> {user.rut}</Text>
+              <Text className={`text-sm ${isDark ? 'text-slate-300' : 'text-slate-700'}`}><Text className="font-bold">Puesto:</Text> {puesto ? puesto.puesto : 'No seleccionado'}</Text>
             </View>
             <View className="flex-row gap-4 mb-4 w-full">
               <TouchableOpacity
-                onPress={() => setShowProfileModal(false)}
+                onPress={() => { setShowProfileModal(false); setDebugTapCount(0); }}
                 className="flex-1 bg-slate-100 py-3 rounded-xl items-center"
               >
                 <Text className="text-slate-700 font-bold">Volver</Text>
@@ -851,7 +1183,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                     } catch (e) {
                       console.error('Error al cerrar sesión:', e);
                     }
-                    setShowProfileModal(false);
+                    setShowProfileModal(false); setDebugTapCount(0);
                     // @ts-ignore
                     navigation.replace('Login');
                   };
@@ -874,6 +1206,16 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 <Text className="text-white font-bold">Cerrar Sesión</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Botón de Reset de Emergencia (OCULTO: Requiere 5 toques en la foto) */}
+            {debugTapCount >= 5 && (
+              <TouchableOpacity
+                  onPress={handleEmergencyReset}
+                  className="w-full py-3 rounded-xl items-center mt-2 border border-orange-200 bg-orange-50"
+              >
+                  <Text className="text-orange-600 font-bold text-xs">Restablecer Estado (Solucionar Error)</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -902,7 +1244,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
         {/* Stats Section */}
         <View className="flex-row gap-3 mb-6">
-          <View className="flex-1 bg-white p-4 rounded-2xl shadow-sm border border-slate-100 items-center justify-center">
+          <View className={`flex-1 p-4 rounded-2xl shadow-sm border items-center justify-center ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
             <Text className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Estado</Text>
             <Text className={`text-lg font-bold ${isActive ? 'text-emerald-500' : 'text-slate-400'}`}>
               {isActive ? 'Activo' : 'Inactivo'}
@@ -912,7 +1254,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           <TouchableOpacity
             onPress={handleCheck}
             disabled={checkDisabled || !isActive}
-            className={`flex-1 p-4 rounded-2xl shadow-sm border border-slate-100 items-center justify-center ${
+            className={`flex-1 p-4 rounded-2xl shadow-sm border items-center justify-center ${isDark ? 'border-slate-700' : 'border-slate-100'} ${
               checkDisabled || !isActive ? 'bg-slate-100' : 'bg-emerald-500'
             }`}
           >
@@ -925,32 +1267,57 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
         {/* Botones de Turno alineados */}
         <View className="flex-row gap-4 mb-6">
-          <TouchableOpacity
-            onPress={handleStartTurn}
+          <HoldButton
+            onActivate={handleStartTurn}
             disabled={isActive}
-            className={`flex-1 rounded-3xl p-5 border h-36 justify-between ${
+            duration={2000}
+            fillColor="rgba(59, 130, 246, 0.2)"
+            className={`flex-1 rounded-3xl border h-36 ${
               !isActive
-                ? 'bg-white border-slate-100'
+                ? (isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100')
                 : 'bg-slate-100 border-transparent opacity-50'
             }`}
           >
-            <View className="absolute -top-2 -right-2 w-20 h-20 rounded-full bg-blue-500/5 z-0" />
-            <MaterialIcons name="play-circle-outline" size={40} color={!isActive ? '#3b82f6' : '#94a3b8'} />
-            <Text className="font-bold text-lg leading-tight text-slate-900 z-10">Comenzar Turno</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={handleEndTurn}
+            <View className="p-5 justify-between h-full w-full">
+              <View className="absolute -top-2 -right-2 w-20 h-20 rounded-full bg-blue-500/5 z-0" />
+              <MaterialIcons name="play-circle-outline" size={40} color={!isActive ? '#3b82f6' : '#94a3b8'} />
+              <View>
+                <Text className={`font-bold text-lg leading-tight z-10 ${isDark ? 'text-white' : 'text-slate-900'}`}>Comenzar Turno</Text>
+                {!isActive && (
+                  <Text className={`text-[10px] font-medium mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Mantén para confirmar</Text>
+                )}
+              </View>
+            </View>
+          </HoldButton>
+          
+          <HoldButton
+            onActivate={handleEndTurn}
             disabled={!isActive}
-            className={`flex-1 rounded-3xl p-5 border h-36 justify-between ${
+            duration={2000}
+            fillColor="rgba(239, 68, 68, 0.2)"
+            className={`flex-1 rounded-3xl border h-36 ${
               isActive
                 ? 'bg-red-50 border-red-200'
                 : 'bg-slate-100 border-transparent opacity-50'
             }`}
           >
-            <View className="absolute -top-2 -right-2 w-20 h-20 rounded-full bg-red-500/10 z-0" />
-            <MaterialIcons name="stop-circle" size={40} color={isActive ? '#ef4444' : '#fca5a5'} />
-            <Text className="font-bold text-lg leading-tight text-red-600 z-10">Terminar Turno</Text>
-          </TouchableOpacity>
+            <View className="p-5 justify-between h-full w-full">
+              <View className="absolute -top-2 -right-2 w-20 h-20 rounded-full bg-red-500/10 z-0" />
+              <MaterialIcons name="stop-circle" size={40} color={isActive ? '#ef4444' : '#fca5a5'} />
+              <View>
+                <Text className="font-bold text-lg leading-tight text-red-600 z-10">Terminar Turno</Text>
+                {isActive ? (
+                  <Text className={`text-[10px] font-bold mt-1 ${completedRoundsCount >= totalRoundsCount ? 'text-emerald-600' : 'text-red-400'}`}>
+                    {completedRoundsCount >= totalRoundsCount 
+                      ? 'Rondas completas' 
+                      : `Faltan rondas (${completedRoundsCount}/${totalRoundsCount})`}
+                  </Text>
+                ) : (
+                  <Text className="text-[10px] text-red-400 font-medium mt-1">Mantén para confirmar</Text>
+                )}
+              </View>
+            </View>
+          </HoldButton>
         </View>
 
         <View className="flex-row gap-4 w-full max-w-xl self-center justify-center">
@@ -968,19 +1335,21 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
               <View className="absolute -left-10 -bottom-10 w-40 h-40 rounded-full bg-white/10" />
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              onPress={handlePanicButton}
+            <HoldButton 
+              onActivate={executePanicAlert}
+              duration={3000}
+              fillColor="rgba(255, 255, 255, 0.3)"
               className="flex-1 relative overflow-hidden rounded-3xl bg-red-700 p-5 shadow-lg flex-row items-center justify-center h-24 min-w-[140px] max-w-[220px]"
             >
-              <View className="flex-row items-center z-10 gap-2">
+              <View className="flex-row items-center z-10 gap-2 w-full h-full justify-center">
                 <MaterialIcons name="emergency-share" size={28} color="white" />
                 <View className="flex-col items-start">
                   <Text className="font-bold text-white text-xl">Botón Pánico</Text>
-                  <Text className="text-red-100 text-xs font-medium mt-1">Emergencias</Text>
+                  <Text className="text-red-100 text-xs font-medium mt-1">Mantén 3 seg</Text>
                 </View>
               </View>
               <View className="absolute -left-10 -bottom-10 w-40 h-40 rounded-full bg-white/10" />
-            </TouchableOpacity>
+            </HoldButton>
           </View>
 
           <TouchableOpacity 
@@ -998,8 +1367,8 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           </TouchableOpacity>
 
         {/* Rondas/Bitacoras List */}
-        <View className="bg-white rounded-t-[40px] shadow-2xl border-t border-slate-100 -mx-4 px-6 pt-6 pb-20 min-h-[400px]">
-          <View className="flex-row items-center justify-between border-b border-slate-100 mb-4">
+        <View className={`rounded-t-[40px] shadow-2xl border-t -mx-4 px-6 pt-6 pb-20 min-h-[400px] ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
+          <View className={`flex-row items-center justify-between border-b mb-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
             <View className="flex-row">
               <TouchableOpacity 
                 onPress={() => setActiveTab('RONDAS')}
@@ -1028,18 +1397,18 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
             </View>
             
             {activeTab === 'RONDAS' && (
-               <View className="flex-row bg-slate-100 rounded-lg p-1">
+               <View className={`flex-row rounded-lg p-1 ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}>
                   <TouchableOpacity 
                     onPress={() => setPeriodFilter('hoy')}
-                    className={`px-3 py-1 rounded-md ${periodFilter === 'hoy' ? 'bg-white shadow-sm' : ''}`}
+                    className={`px-3 py-1 rounded-md ${periodFilter === 'hoy' ? (isDark ? 'bg-slate-600' : 'bg-white shadow-sm') : ''}`}
                   >
-                    <Text className={`text-xs font-bold ${periodFilter === 'hoy' ? 'text-slate-700' : 'text-slate-400'}`}>Hoy</Text>
+                    <Text className={`text-xs font-bold ${periodFilter === 'hoy' ? (isDark ? 'text-white' : 'text-slate-700') : 'text-slate-400'}`}>Hoy</Text>
                   </TouchableOpacity>
                   <TouchableOpacity 
                     onPress={() => setPeriodFilter('semana')}
-                    className={`px-3 py-1 rounded-md ${periodFilter === 'semana' ? 'bg-white shadow-sm' : ''}`}
+                    className={`px-3 py-1 rounded-md ${periodFilter === 'semana' ? (isDark ? 'bg-slate-600' : 'bg-white shadow-sm') : ''}`}
                   >
-                    <Text className={`text-xs font-bold ${periodFilter === 'semana' ? 'text-slate-700' : 'text-slate-400'}`}>Semana</Text>
+                    <Text className={`text-xs font-bold ${periodFilter === 'semana' ? (isDark ? 'text-white' : 'text-slate-700') : 'text-slate-400'}`}>Semana</Text>
                   </TouchableOpacity>
                </View>
             )}
@@ -1048,6 +1417,38 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
           <View className="gap-4">
             {activeTab === 'RONDAS' ? (
               <View className="gap-4">
+                {/* Banner de Turno Extra / Rondas Pendientes */}
+                {rounds.some(r => r.status === RoundStatus.PENDING) && (
+                  <View className={`p-4 rounded-2xl border mb-2 shadow-sm ${isDark ? 'bg-amber-900/20 border-amber-700/50' : 'bg-amber-50 border-amber-200'}`}>
+                    <View className="flex-row items-start gap-3">
+                      <View className="bg-amber-500 w-10 h-10 rounded-full items-center justify-center shadow-sm mt-1">
+                        <MaterialIcons name="notification-important" size={24} color="white" />
+                      </View>
+                      <View className="flex-1">
+                        <Text className={`font-bold text-base mb-1 ${isDark ? 'text-amber-400' : 'text-amber-800'}`}>
+                          Rondas Pendientes ({rounds.filter(r => r.status === RoundStatus.PENDING).length})
+                        </Text>
+                        <View className="gap-1">
+                          {rounds.filter(r => r.status === RoundStatus.PENDING).map((r) => (
+                            <View key={r.id} className="flex-row items-start mb-2">
+                              <MaterialIcons name="schedule" size={14} color={isDark ? '#fcd34d' : '#b45309'} style={{ marginTop: 2, marginRight: 6 }} />
+                              <View>
+                                <Text className={`text-xs font-bold ${isDark ? 'text-amber-200' : 'text-amber-800'}`}>
+                                  {r.time} hrs - {r.location}
+                                </Text>
+                                {puesto && (
+                                  <Text className={`text-[10px] ${isDark ? 'text-amber-300/80' : 'text-amber-700/80'}`}>
+                                    {puesto.puesto} • {puesto.instalaciones}
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                )}
                 {rounds.map(round => (
                   <RoundItem key={round.id} round={round} onStart={() => handleStartRound(round.id)} />
                 ))}
@@ -1080,8 +1481,8 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         onRequestClose={() => setShowObservationsModal(false)}
       >
         <View className="flex-1 justify-center items-center bg-black/60 p-6">
-          <View className="w-full bg-white rounded-3xl p-6 shadow-2xl">
-            <Text className="text-xl font-bold text-slate-900 mb-6 text-center">Registro de Observaciones</Text>
+          <View className={`w-full rounded-3xl p-6 shadow-2xl ${isDark ? 'bg-slate-800' : 'bg-white'}`}>
+            <Text className={`text-xl font-bold mb-6 text-center ${isDark ? 'text-white' : 'text-slate-900'}`}>Registro de Observaciones</Text>
             <View className="gap-4">
               <TouchableOpacity 
                 onPress={handleNoObservations}
@@ -1116,12 +1517,12 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         onRequestClose={() => setShowAddModal(false)}
       >
         <View className="flex-1 justify-end bg-slate-900/40">
-          <View className="w-full bg-white rounded-t-[32px] p-6 shadow-2xl h-[70%]">
+          <View className={`w-full rounded-t-[32px] p-6 shadow-2xl h-[70%] ${isDark ? 'bg-slate-800' : 'bg-white'}`}>
             <View className="flex-row items-center justify-between mb-6">
-              <Text className="text-xl font-bold text-slate-900">Nuevo Evento</Text>
+              <Text className={`text-xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>Nuevo Evento</Text>
               <TouchableOpacity 
                 onPress={() => setShowAddModal(false)}
-                className="w-8 h-8 items-center justify-center rounded-full bg-slate-100"
+                className={`w-8 h-8 items-center justify-center rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
               >
                 <MaterialIcons name="close" size={20} color="#64748b" />
               </TouchableOpacity>
@@ -1137,10 +1538,10 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                       className={`flex-1 py-2 px-1 items-center justify-center rounded-xl border ${
                         newLogType === type 
                           ? 'bg-blue-500 border-blue-500' 
-                          : 'bg-white border-slate-200'
+                          : (isDark ? 'bg-slate-700 border-slate-600' : 'bg-white border-slate-200')
                       }`}
                     >
-                      <Text className={`text-[10px] font-bold ${newLogType === type ? 'text-white' : 'text-slate-500'}`}>
+                      <Text className={`text-[10px] font-bold ${newLogType === type ? 'text-white' : (isDark ? 'text-slate-300' : 'text-slate-500')}`}>
                         {type}
                       </Text>
                     </TouchableOpacity>
@@ -1157,14 +1558,14 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                   numberOfLines={4}
                   style={{
                     width: '100%',
-                    backgroundColor: '#f8fafc',
-                    borderColor: '#cbd5e1',
+                    backgroundColor: isDark ? '#1e293b' : '#f8fafc',
+                    borderColor: isDark ? '#334155' : '#cbd5e1',
                     borderWidth: 1,
                     borderRadius: 16,
                     padding: 16,
                     fontSize: 14,
                     minHeight: 120,
-                    color: '#1e293b',
+                    color: isDark ? '#fff' : '#1e293b',
                     textAlignVertical: 'top'
                   }}
                 />
@@ -1175,7 +1576,7 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
                 <View className="flex-row gap-3">
                   <TouchableOpacity 
                     onPress={handlePickImage}
-                    className="bg-slate-100 p-4 rounded-xl items-center justify-center border border-slate-200 w-20 h-20"
+                    className={`p-4 rounded-xl items-center justify-center border w-20 h-20 ${isDark ? 'bg-slate-700 border-slate-600' : 'bg-slate-100 border-slate-200'}`}
                   >
                     <MaterialIcons name="camera-alt" size={24} color="#64748b" />
                     <Text className="text-[10px] text-slate-500 mt-1">Foto</Text>
@@ -1213,10 +1614,10 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         visible={showMessagesModal}
         onRequestClose={() => setShowMessagesModal(false)}
       >
-        <View className="flex-1 bg-slate-50">
-          <View className="p-4 bg-white border-b border-slate-200 flex-row justify-between items-center">
-            <Text className="text-lg font-bold text-slate-800">Mensajes</Text>
-            <TouchableOpacity onPress={() => setShowMessagesModal(false)} className="p-2 bg-slate-100 rounded-full">
+        <View className={`flex-1 ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`}>
+          <View className={`p-4 border-b flex-row justify-between items-center ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+            <Text className={`text-lg font-bold ${isDark ? 'text-white' : 'text-slate-800'}`}>Mensajes</Text>
+            <TouchableOpacity onPress={() => setShowMessagesModal(false)} className={`p-2 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}>
               <MaterialIcons name="close" size={24} color="#64748b" />
             </TouchableOpacity>
           </View>
@@ -1231,11 +1632,11 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
               <Text className="text-center text-slate-400 mt-10">No hay mensajes.</Text>
             ) : (
               messages.map((msg) => (
-                <View key={msg.id_mensaje} className={`mb-4 p-4 rounded-2xl max-w-[85%] ${msg.emisor === 'GUARDIA' ? 'bg-indigo-100 self-end rounded-tr-none' : 'bg-white self-start rounded-tl-none border border-slate-200'}`}>
-                  <Text className={`text-xs font-bold mb-1 ${msg.emisor === 'GUARDIA' ? 'text-indigo-600' : 'text-slate-500'}`}>
+                <View key={msg.id_mensaje} className={`mb-4 p-4 rounded-2xl max-w-[85%] ${msg.emisor === 'GUARDIA' ? (isDark ? 'bg-indigo-900 self-end rounded-tr-none' : 'bg-indigo-100 self-end rounded-tr-none') : (isDark ? 'bg-slate-800 self-start rounded-tl-none border border-slate-700' : 'bg-white self-start rounded-tl-none border border-slate-200')}`}>
+                  <Text className={`text-xs font-bold mb-1 ${msg.emisor === 'GUARDIA' ? (isDark ? 'text-indigo-300' : 'text-indigo-600') : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>
                     {msg.emisor === 'GUARDIA' ? 'Tú' : 'Supervisor'} • {new Date(msg.fecha_hora).toLocaleString()}
                   </Text>
-                  <Text className="text-slate-600">{msg.contenido}</Text>
+                  <Text className={`${isDark ? 'text-slate-200' : 'text-slate-600'}`}>{msg.contenido}</Text>
                   {msg.emisor === 'GUARDIA' && (
                     <View className="items-end mt-1">
                       <MaterialIcons name="done-all" size={16} color={(msg.leido === 1 || msg.leido === true) ? "#2563eb" : "#94a3b8"} />
@@ -1246,13 +1647,14 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
             )}
           </ScrollView>
 
-          <View className="p-4 bg-white border-t border-slate-200">
+          <View className={`p-4 border-t ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
             <View className="flex-row gap-2 items-center">
               <TextInput
                 value={replyBody}
                 onChangeText={setReplyBody}
                 placeholder="Escribe una respuesta..."
-                className="flex-1 bg-slate-100 p-3 rounded-xl border border-slate-200"
+                placeholderTextColor={isDark ? '#94a3b8' : '#9ca3af'}
+                className={`flex-1 p-3 rounded-xl border ${isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-900'}`}
                 multiline
               />
               <TouchableOpacity 
@@ -1274,12 +1676,12 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
         onRequestClose={() => setShowPanicSuccessModal(false)}
       >
         <View className="flex-1 justify-center items-center bg-black/60 p-6">
-          <View className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl items-center border-2 border-red-50">
+          <View className={`w-full max-w-sm rounded-3xl p-6 shadow-2xl items-center border-2 ${isDark ? 'bg-slate-800 border-red-900' : 'bg-white border-red-50'}`}>
             <View className="w-20 h-20 bg-red-100 rounded-full items-center justify-center mb-4">
               <MaterialIcons name="notifications-active" size={40} color="#ef4444" />
             </View>
             <Text className="text-2xl font-bold text-red-600 mb-2 text-center">¡Alerta Enviada!</Text>
-            <Text className="text-slate-600 text-center mb-8 text-base px-2">
+            <Text className={`text-center mb-8 text-base px-2 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
               Se ha notificado al supervisor con tu ubicación.
             </Text>
             <TouchableOpacity 
@@ -1336,6 +1738,7 @@ interface LogItemProps {
 }
 
 const LogItem: React.FC<LogItemProps> = ({ log }) => {
+  const { isDark } = useTheme();
   const getTypeColor = () => {
     switch(log.type) {
       case 'INCIDENCIA': return 'bg-red-500';
@@ -1346,7 +1749,7 @@ const LogItem: React.FC<LogItemProps> = ({ log }) => {
   };
 
   return (
-    <View className="bg-slate-50 border border-slate-100 rounded-3xl p-4">
+    <View className={`border rounded-3xl p-4 ${isDark ? 'bg-slate-900 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
       <View className="flex-row items-center justify-between mb-2">
         <View className="flex-row items-center gap-2">
           <View className={`w-2 h-2 rounded-full ${getTypeColor()}`} />
@@ -1354,7 +1757,7 @@ const LogItem: React.FC<LogItemProps> = ({ log }) => {
         </View>
         <Text className="text-[10px] font-medium text-slate-400">{log.date} {log.timestamp}</Text>
       </View>
-      <Text className="text-sm text-slate-700 leading-relaxed mb-3">{log.description}</Text>
+      <Text className={`text-sm leading-relaxed mb-3 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{log.description}</Text>
       <View className="pt-3 border-t border-slate-200 flex-row items-center gap-2">
         <MaterialIcons name="person" size={14} color="#94a3b8" />
         <Text className="text-[10px] font-medium text-slate-400">{log.author}</Text>
@@ -1369,6 +1772,7 @@ interface RoundItemProps {
 }
 
 const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
+  const { isDark } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [points, setPoints] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1413,27 +1817,27 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
       case RoundStatus.COMPLETED:
         return {
           icon: 'check-circle' as const,
-          bg: 'bg-emerald-50',
-          text: 'text-emerald-600',
+          bg: isDark ? 'bg-emerald-900/30' : 'bg-emerald-50',
+          text: isDark ? 'text-emerald-400' : 'text-emerald-600',
           bar: 'bg-emerald-500',
-          border: 'border-emerald-100'
+          border: isDark ? 'border-emerald-900' : 'border-emerald-100'
         };
       case RoundStatus.PENDING:
         return {
           icon: 'schedule' as const,
-          bg: 'bg-blue-50',
-          text: 'text-blue-600',
+          bg: isDark ? 'bg-blue-900/30' : 'bg-blue-50',
+          text: isDark ? 'text-blue-400' : 'text-blue-600',
           bar: 'bg-blue-500',
-          border: 'border-blue-100'
+          border: isDark ? 'border-blue-900' : 'border-blue-100'
         };
       case RoundStatus.SCHEDULED:
       default:
         return {
           icon: 'lock-clock' as const,
-          bg: 'bg-slate-50',
+          bg: isDark ? 'bg-slate-800' : 'bg-slate-50',
           text: 'text-slate-400',
           bar: 'bg-slate-300',
-          border: 'border-slate-100'
+          border: isDark ? 'border-slate-700' : 'border-slate-100'
         };
     }
   };
@@ -1460,15 +1864,15 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
     <TouchableOpacity 
       onPress={toggleExpand}
       activeOpacity={0.9}
-      className={`p-5 rounded-[24px] bg-white shadow-sm border border-slate-100 mb-3 ${round.status === RoundStatus.SCHEDULED ? 'opacity-70' : ''}`}
+      className={`p-5 rounded-[24px] shadow-sm border mb-3 ${isDark ? 'bg-slate-900' : 'bg-white'} ${config.border} ${round.status === RoundStatus.SCHEDULED ? 'opacity-70' : ''}`}
     >
       <View className="flex-row justify-between items-start mb-4">
         <View className="flex-row items-center gap-3 flex-1 mr-2">
           <View className={`w-10 h-10 rounded-2xl ${config.bg} items-center justify-center`}>
-            <MaterialIcons name={config.icon} size={20} color={config.text.includes('slate') ? '#94a3b8' : config.text.includes('emerald') ? '#059669' : '#2563eb'} />
+            <MaterialIcons name={config.icon} size={20} color={config.text.includes('slate') ? '#94a3b8' : config.text.includes('emerald') ? (isDark ? '#34d399' : '#059669') : (isDark ? '#60a5fa' : '#2563eb')} />
           </View>
           <View className="flex-1">
-            <Text className="text-base font-bold text-slate-800 leading-tight" numberOfLines={1}>{round.location}</Text>
+            <Text className={`text-base font-bold leading-tight ${isDark ? 'text-white' : 'text-slate-800'}`} numberOfLines={1}>{round.location}</Text>
             <Text className="text-xs text-slate-400 font-medium mt-0.5">
               {round.time} {round.completedTime ? `→ ${round.completedTime}` : ''}
             </Text>
@@ -1484,9 +1888,9 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
         <View className="mb-3">
           <View className="flex-row justify-between mb-1.5">
             <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Progreso</Text>
-            <Text className="text-[10px] font-bold text-slate-600">{markedPoints}/{totalPoints}</Text>
+            <Text className={`text-[10px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{markedPoints}/{totalPoints}</Text>
           </View>
-          <View className="h-2 bg-slate-100 rounded-full overflow-hidden">
+          <View className={`h-2 rounded-full overflow-hidden ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}>
             <View 
               className={`h-full rounded-full ${config.bar}`} 
               style={{ width: `${progressPercent}%` }} 
@@ -1497,37 +1901,80 @@ const RoundItem: React.FC<RoundItemProps> = ({ round, onStart }) => {
 
       {!isLocalRound && (
          <View className="items-center -mb-2">
-            <MaterialIcons name={expanded ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={20} color="#e2e8f0" />
+            <MaterialIcons name={expanded ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={20} color={isDark ? "#334155" : "#e2e8f0"} />
          </View>
       )}
 
       {expanded && (
-        <View className="mt-4 pt-4 border-t border-slate-200">
+        <View className={`mt-4 pt-4 border-t ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
           {loading ? (
             <Text className="text-center text-slate-400 text-xs py-2">Cargando puntos...</Text>
           ) : (
             <View className="gap-2">
-              {points.map((point, index) => (
-                <View key={index} className="flex-row items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <View className="flex-row items-center gap-3 flex-1">
-                    <View className={`w-2 h-2 rounded-full ${point.marcado ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                    <View className="flex-1">
-                      <Text className={`text-xs font-bold ${point.marcado ? 'text-slate-700' : 'text-slate-500'}`}>{point.nombre}</Text>
-                      {point.descripcion ? <Text className="text-[10px] text-slate-400" numberOfLines={1}>{point.descripcion}</Text> : null}
+              {points.map((point, index) => {
+                // Cálculo de Hora Ideal
+                let idealTimeStr = "--:--";
+                let isLate = false;
+                
+                if (round.time) {
+                  const [h, m] = round.time.split(':').map(Number);
+                  const baseDate = new Date();
+                  baseDate.setHours(h, m, 0, 0);
+                  
+                  // Usamos 60 min como duración estándar o calculamos si tuviéramos hora fin
+                  // @ts-ignore
+                  const total = round.totalPoints || points.length || 1;
+                  const interval = 60 / total;
+                  const offset = index * interval;
+                  
+                  const idealDate = new Date(baseDate.getTime() + offset * 60000);
+                  idealTimeStr = idealDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+
+                  // Verificar atraso si está marcado
+                  if (point.marcado && point.hora_marcaje) {
+                     const markedDate = new Date(point.hora_marcaje);
+                     // Comparamos solo tiempos del día actual para simplificar
+                     const markedTime = new Date();
+                     markedTime.setHours(markedDate.getHours(), markedDate.getMinutes(), 0, 0);
+                     
+                     const idealTimeToday = new Date();
+                     idealTimeToday.setHours(idealDate.getHours(), idealDate.getMinutes(), 0, 0);
+                     
+                     const diff = (markedTime.getTime() - idealTimeToday.getTime()) / 60000;
+                     if (diff > 10) isLate = true;
+                  }
+                }
+
+                return (
+                  <View key={index} className={`flex-row items-center justify-between p-3 rounded-xl border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                    <View className="flex-row items-center gap-3 flex-1">
+                      <View className={`w-2 h-2 rounded-full ${point.marcado ? 'bg-emerald-500' : (isDark ? 'bg-slate-600' : 'bg-slate-300')}`} />
+                      <View className="flex-1">
+                        <Text className={`text-xs font-bold ${point.marcado ? (isDark ? 'text-slate-200' : 'text-slate-700') : 'text-slate-500'}`}>{point.nombre}</Text>
+                        <View className="flex-row items-center gap-2">
+                          {point.descripcion ? <Text className="text-[10px] text-slate-400" numberOfLines={1}>{point.descripcion}</Text> : null}
+                          <Text className="text-[10px] text-slate-400 italic">Ideal: {idealTimeStr}</Text>
+                        </View>
+                      </View>
                     </View>
+                    {point.marcado ? (
+                      <View className="items-end">
+                        <View className={`flex-row items-center gap-1 px-2 py-1 rounded-lg border ${isDark ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-100'}`}>
+                          <MaterialIcons name="check-circle" size={12} color="#10b981" />
+                          <Text className="text-[10px] font-medium text-emerald-600">
+                            {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                          </Text>
+                        </View>
+                        {isLate && (
+                          <Text className="text-[9px] text-red-500 font-bold mt-0.5">Atrasado</Text>
+                        )}
+                      </View>
+                    ) : (
+                      <Text className="text-[10px] font-medium text-slate-400 italic">Pendiente</Text>
+                    )}
                   </View>
-                  {point.marcado ? (
-                    <View className="flex-row items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-100">
-                      <MaterialIcons name="check-circle" size={12} color="#10b981" />
-                      <Text className="text-[10px] font-medium text-emerald-600">
-                        {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </Text>
-                    </View>
-                  ) : (
-                    <Text className="text-[10px] font-medium text-slate-400 italic">Pendiente</Text>
-                  )}
-                </View>
-              ))}
+                );
+              })}
               {points.length === 0 && <Text className="text-center text-slate-400 text-xs">No hay puntos de control asignados.</Text>}
             </View>
           )}

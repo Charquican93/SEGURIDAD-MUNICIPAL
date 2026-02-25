@@ -66,7 +66,7 @@ const NotificationsScreen = () => {
           <Text style={[styles.title, !item.leido && styles.unreadText]}>{item.titulo}</Text>
         </View>
         <Text style={styles.date}>
-          {new Date(item.fecha_hora).toLocaleDateString()} {new Date(item.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+          {new Date(item.fecha_hora).toLocaleDateString()} {new Date(item.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})}
         </Text>
       </View>
       <Text style={styles.content}>{item.contenido}</Text>

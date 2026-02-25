@@ -271,7 +271,7 @@ const Messages: React.FC = () => {
                           {msg.contenido}
                         </div>
                         <div style={{ fontSize: '0.7rem', color: '#a0aec0', marginTop: '4px', textAlign: isMe ? 'right' : 'left', display: 'flex', alignItems: 'center', justifyContent: isMe ? 'flex-end' : 'flex-start', gap: '4px' }}>
-                          {new Date(msg.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {new Date(msg.fecha_hora).toLocaleDateString()}
+                          {new Date(msg.fecha_hora).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})} • {new Date(msg.fecha_hora).toLocaleDateString()}
                           {isMe && (
                             <svg width="14" height="14" viewBox="0 0 24 24" fill={msg.leido ? "#3182ce" : "#cbd5e0"} xmlns="http://www.w3.org/2000/svg">
                               <path d="M18 7L16.59 5.59L10.25 11.93L11.66 13.34L18 7ZM22.24 5.59L11.66 16.17L7.48 12L6.07 13.41L11.66 19L23.66 7L22.24 5.59ZM0.41 13.41L6 19L7.41 17.59L1.83 12L0.41 13.41Z" />

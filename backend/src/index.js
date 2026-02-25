@@ -19,6 +19,7 @@ const rutasBitacoras = require('./rutas/bitacoras.rutas');
 const rutasMensajes = require('./rutas/mensajes.rutas');
 const rutasDashboard = require('./rutas/dashboard.rutas');
 const rutasOperaciones = require('./rutas/operaciones.rutas');
+const rutasTurnos = require('./rutas/turnos.rutas');
 
 app.use(rutasAutenticacion);
 app.use(rutasGuardias);
@@ -27,6 +28,7 @@ app.use(rutasBitacoras);
 app.use(rutasMensajes);
 app.use(rutasDashboard);
 app.use(rutasOperaciones);
+app.use(rutasTurnos);
 
 app.get('/', (req, res) => {
   res.send('API funcionando');

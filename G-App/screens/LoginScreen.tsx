@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, TouchableOpacity, Modal, FlatList } from 'react-native';
+import { View, Text, TextInput, Button, StyleSheet, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '../config';
 import { formatRut } from '../screens/formatters';
+import { useTheme } from '../context/ThemeContext';
 
 const LoginScreen = ({ navigation }) => {
+  const { isDark } = useTheme(); // Usar el hook
   const [rut, setRut] = useState('');
   const [contrasena, setContrasena] = useState('');
   const [loading, setLoading] = useState(false);
-  const [puestos, setPuestos] = useState([]);
-  const [selectedPuesto, setSelectedPuesto] = useState(null);
-  const [showPuestoModal, setShowPuestoModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -29,18 +28,6 @@ const LoginScreen = ({ navigation }) => {
       }
     };
     checkSession();
-
-    // Cargar puestos al iniciar
-    const loadPuestos = () => {
-      fetch(`${API_URL}/puestos`)
-        .then(res => res.json())
-        .then(data => {
-          setPuestos(data);
-          setErrorMsg('');
-        })
-        .catch(err => setErrorMsg(`Error conectando a ${API_URL}\n${err.message}`));
-    };
-    loadPuestos();
   }, []);
 
   const handleLogin = async () => {
@@ -58,35 +45,27 @@ const LoginScreen = ({ navigation }) => {
       });
       const data = await response.json();
       if (response.ok) {
-        const { guardia, activeTurn, puestoSugerido } = data;
+        const { guardia, activeTurn, puestoSugerido, puesto } = data;
         let puestoFinal = null;
 
-        // 1. Si el backend nos dice que ya hay un turno activo, forzamos ese puesto.
-        if (activeTurn && activeTurn.id_puesto) {
-          const puestoActivo = puestos.find((p: any) => p.id_puesto === activeTurn.id_puesto);
-          if (puestoActivo) {
-            puestoFinal = puestoActivo;
-            Alert.alert('Sesión Restaurada', `Tienes un turno activo en "${puestoActivo.puesto}". Se ha retomado tu puesto automáticamente.`);
-          }
+        // 1. Si el backend nos dice que ya hay un turno activo, usamos esa info (el backend debe devolver el objeto puesto completo en activeTurn o sugerido)
+        if (activeTurn && activeTurn.puesto) {
+            puestoFinal = activeTurn.puesto;
+            Alert.alert('Sesión Restaurada', `Tienes un turno activo en "${puestoFinal.puesto}". Se ha retomado tu puesto automáticamente.`);
         } 
         // 2. Si no hay turno activo, pero el backend sugiere un puesto (Plan A), lo usamos.
         else if (puestoSugerido) {
           puestoFinal = puestoSugerido;
-          // Actualizamos el estado local para que el selector muestre el puesto asignado.
-          setSelectedPuesto(puestoSugerido); 
           Alert.alert('Puesto Asignado', `Se te ha asignado automáticamente al puesto "${puestoSugerido.puesto}" según tus rondas de hoy.`);
         }
-        // 3. Si no hay sugerencia, usamos el que el guardia seleccionó manualmente.
-        else if (selectedPuesto) {
-          puestoFinal = selectedPuesto;
+        // 3. Si tiene un puesto fijo asignado en su perfil (Plan B)
+        else if (puesto || guardia.puesto) {
+          puestoFinal = puesto || guardia.puesto;
         }
 
-        // 4. Si después de todo no tenemos puesto, es un error (guardia volante que no eligió).
+        // 4. Si no hay puesto, permitimos el ingreso (Modo Sin Puesto) en lugar de bloquear
         if (!puestoFinal) {
-          Alert.alert('Selección Requerida', 'No tienes un puesto asignado para hoy. Por favor, selecciona uno de la lista para continuar.');
-          setShowPuestoModal(true);
-          setLoading(false);
-          return;
+           // Opcional: Alert.alert('Aviso', 'Ingresando sin puesto específico.');
         }
 
         // Guardar la sesión en el dispositivo
@@ -109,8 +88,8 @@ const LoginScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Inicio de Sesión</Text>
+    <View style={[styles.container, isDark && { backgroundColor: '#0f172a' }]}>
+      <Text style={[styles.title, isDark && { color: '#fff' }]}>Inicio de Sesión</Text>
       {errorMsg ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{errorMsg}</Text>
@@ -118,7 +97,8 @@ const LoginScreen = ({ navigation }) => {
       ) : null}
 
       <TextInput
-        style={styles.input}
+        style={[styles.input, isDark && { backgroundColor: '#1e293b', borderColor: '#334155', color: '#fff' }]}
+        placeholderTextColor={isDark ? '#94a3b8' : '#9ca3af'}
         placeholder="RUT"
         value={rut}
         onChangeText={(text) => setRut(formatRut(text))}
@@ -126,53 +106,15 @@ const LoginScreen = ({ navigation }) => {
         keyboardType="default"
       />
       <TextInput
-        style={styles.input}
+        style={[styles.input, isDark && { backgroundColor: '#1e293b', borderColor: '#334155', color: '#fff' }]}
+        placeholderTextColor={isDark ? '#94a3b8' : '#9ca3af'}
         placeholder="Contraseña"
         value={contrasena}
         onChangeText={setContrasena}
         secureTextEntry
       />
 
-      <TouchableOpacity 
-        style={styles.selector} 
-        onPress={() => setShowPuestoModal(true)}
-      >
-        <Text style={styles.selectorText}>
-          {selectedPuesto ? `${selectedPuesto.puesto} - ${selectedPuesto.instalaciones}` : 'Seleccionar Puesto'}
-        </Text>
-      </TouchableOpacity>
-
       <Button title={loading ? 'Ingresando...' : 'Ingresar'} onPress={handleLogin} disabled={loading} />
-
-      <Modal
-        visible={showPuestoModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowPuestoModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Selecciona tu Puesto</Text>
-            <FlatList
-              data={puestos}
-              keyExtractor={(item) => item.id_puesto.toString()}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.modalItem}
-                  onPress={() => {
-                    setSelectedPuesto(item);
-                    setShowPuestoModal(false);
-                  }}
-                >
-                  <Text style={styles.modalItemText}>{`${item.puesto} - ${item.instalaciones}`}</Text>
-                </TouchableOpacity>
-              )}
-            />
-            <Button title="Cancelar" onPress={() => setShowPuestoModal(false)} color="red" />
-          </View>
-        </View>
-      </Modal>
-
     </View>
   );
 };
@@ -209,48 +151,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 16,
     paddingHorizontal: 12,
-    fontSize: 16,
-  },
-  selector: {
-    width: '100%',
-    height: 48,
-    borderColor: '#ccc',
-    borderWidth: 1,
-    borderRadius: 8,
-    marginBottom: 16,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    backgroundColor: '#f9f9f9',
-  },
-  selectorText: {
-    fontSize: 16,
-    color: '#333',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '80%',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 20,
-    maxHeight: '60%',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-    textAlign: 'center',
-  },
-  modalItem: {
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  modalItemText: {
     fontSize: 16,
   },
 });

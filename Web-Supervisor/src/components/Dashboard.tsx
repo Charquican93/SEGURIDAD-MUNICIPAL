@@ -42,10 +42,6 @@ const Dashboard: React.FC = () => {
   const [expandedRoundId, setExpandedRoundId] = useState<string | null>(null);
   const [roundPoints, setRoundPoints] = useState<any[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
-  const [messageTitle, setMessageTitle] = useState('');
-  const [messageBody, setMessageBody] = useState('');
-  const [sendingMessage, setSendingMessage] = useState(false);
-  const [guardMessages, setGuardMessages] = useState<any[]>([]);
   const [showRoundsModal, setShowRoundsModal] = useState(false);
   const [todaysRounds, setTodaysRounds] = useState<any[]>([]);
   const [guardFilter, setGuardFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
@@ -149,37 +145,15 @@ const Dashboard: React.FC = () => {
     setGuardChecks([]); // Limpiar anteriores
     setExpandedRoundId(null); // Resetear ronda expandida
     setRoundPoints([]);
-    setGuardMessages([]); // Limpiar mensajes anteriores
-    setMessageTitle('');
-    setMessageBody('');
     try {
-      const [detailsRes, roundsRes, checksRes, messagesRes] = await Promise.all([
+      const [detailsRes, roundsRes, checksRes] = await Promise.all([
         axios.get(`${API_URL}/guardias/${guard.id_guardia}`),
         axios.get(`${API_URL}/rondas?id_guardia=${guard.id_guardia}`),
-        axios.get(`${API_URL}/checks?id_guardia=${guard.id_guardia}`),
-        axios.get(`${API_URL}/mensajes?id_guardia=${guard.id_guardia}`)
+        axios.get(`${API_URL}/checks?id_guardia=${guard.id_guardia}`)
       ]);
       setSelectedGuard(detailsRes.data);
       setGuardRounds(roundsRes.data);
       setGuardChecks(checksRes.data);
-      setGuardMessages(messagesRes.data);
-
-      // Marcar mensajes como leídos automáticamente (Filtrado robusto)
-      const unreadMsgs = messagesRes.data.filter((m: any) => 
-        m.emisor === 'GUARDIA' && 
-        (m.leido === 0 || m.leido === false || m.leido === null || m.leido === "0")
-      );
-
-      if (unreadMsgs.length > 0) {
-        // 1. Actualizar en backend
-        Promise.all(unreadMsgs.map((msg: any) => 
-          axios.patch(`${API_URL}/mensajes/${msg.id_mensaje}`, { leido: 1 })
-        )).catch(err => console.error('Error marcando mensajes:', err));
-        // 2. Actualizar visualmente
-        setGuardMessages(prev => prev.map((m: any) => 
-          (m.emisor === 'GUARDIA' && (m.leido === 0 || m.leido === false)) ? { ...m, leido: true } : m
-        ));
-      }
     } catch (error) {
       console.error('Error fetching guard details:', error);
     }
@@ -303,32 +277,6 @@ const Dashboard: React.FC = () => {
     handleGuardClick(guard);
   };
 
-  const handleSendMessage = async () => {
-    if (!messageTitle.trim() || !messageBody.trim() || !selectedGuard) return;
-    
-    setSendingMessage(true);
-    try {
-      await axios.post(`${API_URL}/mensajes`, {
-        id_guardia: selectedGuard.id_guardia,
-        titulo: messageTitle,
-        contenido: messageBody
-      });
-      alert('Mensaje enviado correctamente');
-      setMessageTitle('');
-      setMessageBody('');
-      
-      // Recargar la lista de mensajes para ver el nuevo
-      const msgsRes = await axios.get(`${API_URL}/mensajes?id_guardia=${selectedGuard.id_guardia}`);
-      setGuardMessages(msgsRes.data);
-
-    } catch (error) {
-      console.error('Error sending message:', error);
-      alert('Error al enviar el mensaje');
-    } finally {
-      setSendingMessage(false);
-    }
-  };
-
   const handleRoundsStatsClick = async () => {
     setShowRoundsModal(true);
     setTodaysRounds([]);
@@ -361,6 +309,97 @@ const Dashboard: React.FC = () => {
     ? Math.round((currentStats.completed / currentStats.total) * 100) 
     : 0;
 
+  const getEventStyle = (type: string) => {
+    switch (type) {
+      case 'INCIDENCIA': return { backgroundColor: '#fed7d7', color: '#c53030' };
+      case 'OBSERVACION': return { backgroundColor: '#feebc8', color: '#c05621' };
+      default: return { backgroundColor: '#bee3f8', color: '#2b6cb0' };
+    }
+  };
+
+  // Función auxiliar para renderizar el estado con alerta de atraso
+  const renderRoundStatus = (ronda: any) => {
+    const now = new Date();
+    let isLate = false;
+    let isEarly = false;
+    let delayMin = 0;
+
+    // Parsear fecha/hora programada
+    if (ronda.hora) {
+        const roundDate = ronda.fecha ? new Date(ronda.fecha) : new Date();
+        const [h, m] = ronda.hora.split(':');
+        roundDate.setHours(parseInt(h), parseInt(m), 0, 0);
+
+        // 1. Lógica para PENDIENTES (Monitoreo en tiempo real)
+        if (ronda.estado === 'PENDIENTE') {
+            const diff = (now.getTime() - roundDate.getTime()) / 60000;
+            if (diff > 10) { // Margen de 10 min
+                isLate = true;
+                delayMin = Math.floor(diff);
+            }
+        }
+        
+        // 2. Lógica para COMPLETADAS / EN PROGRESO (Histórico)
+        // Verifica si existe 'hora_inicio' (hora real de marcaje) y compara
+        if ((ronda.estado === 'COMPLETADA' || ronda.estado === 'EN_PROGRESO') && ronda.hora_inicio) {
+             const [hI, mI] = ronda.hora_inicio.split(':');
+             const startDate = new Date(roundDate); // Copia fecha base
+             startDate.setHours(parseInt(hI), parseInt(mI), 0, 0);
+             
+             const diff = (startDate.getTime() - roundDate.getTime()) / 60000;
+             if (diff > 10) {
+                 isLate = true;
+                 delayMin = Math.floor(diff);
+             } else if (diff < -10) {
+                 isEarly = true;
+                 delayMin = Math.floor(Math.abs(diff));
+             }
+        }
+    }
+
+    if (isLate) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                <span style={{
+                    padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold',
+                    backgroundColor: '#fed7d7', color: '#c53030', border: '1px solid #feb2b2', whiteSpace: 'nowrap'
+                }}>
+                    {ronda.estado === 'PENDIENTE' ? 'ATRASADA' : 'INICIÓ TARDE'}
+                </span>
+                <span style={{ fontSize: '0.65rem', color: '#e53e3e', fontWeight: 'bold' }}>
+                    +{delayMin} min
+                </span>
+            </div>
+        );
+    }
+
+    if (isEarly) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                <span style={{
+                    padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold',
+                    backgroundColor: '#bee3f8', color: '#2b6cb0', border: '1px solid #90cdf4', whiteSpace: 'nowrap'
+                }}>
+                    ANTICIPADA
+                </span>
+                <span style={{ fontSize: '0.65rem', color: '#3182ce', fontWeight: 'bold' }}>
+                    -{delayMin} min
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <span style={{
+            padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold',
+            backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
+            color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
+        }}>
+            {ronda.estado}
+        </span>
+    );
+  };
+
   return (
     <Layout title="Panel de Control">
       <style>{`
@@ -369,11 +408,23 @@ const Dashboard: React.FC = () => {
           50% { background-color: rgba(229, 62, 62, 0.1); }
           100% { background-color: transparent; }
         }
+        @keyframes pulse-green {
+          0% {
+            box-shadow: 0 0 0 0 rgba(56, 161, 105, 0.7);
+          }
+          70% {
+            box-shadow: 0 0 0 10px rgba(56, 161, 105, 0);
+          }
+          100% {
+            box-shadow: 0 0 0 0 rgba(56, 161, 105, 0);
+          }
+        }
         .blink-red {
           animation: pulse-red 2s infinite ease-in-out;
         }
       `}</style>
       {/* Puestos (Almohadillas Horizontales) */}
+
       <div style={{ marginBottom: '30px' }}>
         <h3 style={{ marginTop: 0, color: '#4a5568', marginBottom: '15px' }}>Puestos</h3>
         <div 
@@ -487,8 +538,24 @@ const Dashboard: React.FC = () => {
               }}>
                 <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1rem' }}>{guardia.nombre} {guardia.apellido}</div>
                 <div style={{ fontSize: '0.85rem', color: '#718096', marginTop: '4px' }}>RUT: {guardia.rut}</div>
-                <div style={{ fontSize: '0.85rem', marginTop: '4px', color: guardia.activo ? '#38a169' : '#e53e3e', fontWeight: 'bold' }}>
-                  {guardia.activo ? '● Activo' : '○ Inactivo'}
+                <div style={{ fontSize: '0.85rem', marginTop: '8px', color: guardia.activo ? '#38a169' : '#a0aec0', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {guardia.activo ? (
+                    <span style={{
+                      width: '10px',
+                      height: '10px',
+                      backgroundColor: '#38a169',
+                      borderRadius: '50%',
+                      animation: 'pulse-green 2s infinite'
+                    }}></span>
+                  ) : (
+                    <span style={{
+                      width: '10px',
+                      height: '10px',
+                      backgroundColor: '#cbd5e0',
+                      borderRadius: '50%'
+                    }}></span>
+                  )}
+                  <span>{guardia.activo ? 'Activo' : 'Inactivo'}</span>
                 </div>
               </div>
             ))
@@ -769,8 +836,7 @@ const Dashboard: React.FC = () => {
                   >
                     <td style={{ padding: '10px 0' }}>
                       <span style={{ 
-                        backgroundColor: event.type === 'INCIDENCIA' ? '#fed7d7' : event.type === 'OBSERVACION' ? '#feebc8' : '#bee3f8', 
-                        color: event.type === 'INCIDENCIA' ? '#c53030' : event.type === 'OBSERVACION' ? '#c05621' : '#2b6cb0',
+                        ...getEventStyle(event.type),
                         padding: '2px 6px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' 
                       }}>{event.type}</span>
                     </td>
@@ -852,7 +918,7 @@ const Dashboard: React.FC = () => {
             </h2>
             
             <div style={{ marginBottom: '25px', background: '#f8fafc', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
                 <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: '#3182ce', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold', marginRight: '15px' }}>
                   {selectedGuard.nombre.charAt(0)}{selectedGuard.apellido.charAt(0)}
                 </div>
@@ -871,7 +937,30 @@ const Dashboard: React.FC = () => {
                     {selectedGuard.activo ? 'Activo' : 'Inactivo'}
                   </span>
                 </div>
+                <button 
+                  onClick={() => {
+                    navigate('/mensajes', { state: { selectedGuard } });
+                  }}
+                  style={{ 
+                    marginLeft: 'auto',
+                    backgroundColor: '#3182ce',
+                    color: 'white',
+                    border: 'none',
+                    padding: '10px 20px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                  }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                  Mensaje
+                </button>
               </div>
+            </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                 <div style={{ background: 'white', padding: '10px', borderRadius: '8px', border: '1px solid #edf2f7' }}>
@@ -887,95 +976,6 @@ const Dashboard: React.FC = () => {
                   <span style={{ color: '#2d3748', fontWeight: '500' }}>{selectedGuard.correo || 'No registrado'}</span>
                 </div>
               </div>
-            </div>
-
-            {/* Sección de Envío de Mensajes */}
-            <div style={{ marginBottom: '25px', background: '#ebf8ff', padding: '20px', borderRadius: '12px', border: '1px solid #bee3f8' }}>
-              <h3 style={{ marginTop: 0, color: '#2b6cb0', marginBottom: '10px' }}>Enviar Mensaje al Guardia</h3>
-              <input 
-                type="text" 
-                placeholder="Asunto / Título"
-                value={messageTitle}
-                onChange={(e) => setMessageTitle(e.target.value)}
-                style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #cbd5e0', boxSizing: 'border-box' }}
-              />
-              <textarea 
-                placeholder="Escribe tu mensaje aquí..."
-                value={messageBody}
-                onChange={(e) => setMessageBody(e.target.value)}
-                style={{ width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #cbd5e0', minHeight: '80px', boxSizing: 'border-box', resize: 'vertical' }}
-              />
-              <button 
-                onClick={handleSendMessage}
-                disabled={sendingMessage || !messageTitle || !messageBody}
-                style={{ background: '#3182ce', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', opacity: sendingMessage ? 0.7 : 1 }}
-              >
-                {sendingMessage ? 'Enviando...' : 'Enviar Mensaje'}
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-              <h3 style={{ color: '#4a5568', margin: 0 }}>Historial de Mensajes</h3>
-              <button 
-                onClick={async () => {
-                  if (selectedGuard) {
-                    const msgsRes = await axios.get(`${API_URL}/mensajes?id_guardia=${selectedGuard.id_guardia}`);
-                    setGuardMessages(msgsRes.data);
-                  }
-                }}
-                style={{ 
-                  background: 'transparent', border: 'none', cursor: 'pointer', color: '#3182ce', 
-                  fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' 
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Recargar
-              </button>
-            </div>
-            {guardMessages.length === 0 ? (
-              <p style={{ color: '#718096', fontStyle: 'italic', marginBottom: '25px', background: '#f7fafc', padding: '10px', borderRadius: '8px' }}>
-                No hay mensajes enviados a este guardia.
-              </p>
-            ) : (
-              <div style={{ maxHeight: '200px', overflowY: 'auto', marginBottom: '25px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                  <thead style={{ position: 'sticky', top: 0, background: '#f7fafc' }}>
-                    <tr>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Fecha</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Remitente</th>
-                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Título</th>
-                      <th style={{ padding: '10px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {guardMessages.map((msg: any) => (
-                      <tr key={msg.id_mensaje} style={{ borderBottom: '1px solid #edf2f7' }}>
-                        <td style={{ padding: '10px', color: '#4a5568' }}>{new Date(msg.fecha_hora).toLocaleString()}</td>
-                        <td style={{ padding: '10px' }}>
-                          {msg.emisor === 'GUARDIA' ? (
-                            <span style={{ color: '#3182ce', fontWeight: 'bold', fontSize: '0.8rem' }}>📥 GUARDIA</span>
-                          ) : (
-                            <span style={{ color: '#718096', fontWeight: 'bold', fontSize: '0.8rem' }}>📤 SUPERVISOR</span>
-                          )}
-                        </td>
-                        <td style={{ padding: '10px', color: '#2d3748', fontWeight: '500' }}>{msg.titulo}</td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          <span style={{
-                            padding: '2px 8px',
-                            borderRadius: '10px',
-                            fontSize: '0.7rem',
-                            fontWeight: 'bold',
-                            backgroundColor: msg.leido ? '#c6f6d5' : '#feebc8',
-                            color: msg.leido ? '#2f855a' : '#c05621'
-                          }}>
-                            {msg.leido ? 'LEÍDO' : 'NO LEÍDO'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
 
             <h3 style={{ color: '#4a5568', marginBottom: '15px' }}>Rondas Asignadas</h3>
             
@@ -1017,16 +1017,7 @@ const Dashboard: React.FC = () => {
                             ) : <span style={{color: '#cbd5e0', fontStyle: 'italic'}}>Sin asignar</span>}
                           </td>
                           <td style={{ padding: '12px' }}>
-                            <span style={{
-                              padding: '4px 8px',
-                              borderRadius: '12px',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold',
-                              backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
-                              color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
-                            }}>
-                              {ronda.estado}
-                            </span>
+                            {renderRoundStatus(ronda)}
                           </td>
                           <td style={{ padding: '12px', color: '#4a5568' }}>
                             {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'} pts
@@ -1042,32 +1033,67 @@ const Dashboard: React.FC = () => {
                                 <p style={{ fontSize: '0.8rem', color: '#718096' }}>No hay puntos registrados en esta ronda.</p>
                               ) : (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-                                  {roundPoints.map((point: any) => (
-                                    <div key={point.id_punto} style={{ 
-                                      background: 'white', 
-                                      padding: '8px', 
-                                      borderRadius: '6px', 
-                                      border: `1px solid ${point.marcado ? '#c6f6d5' : '#e2e8f0'}`,
-                                      display: 'flex',
-                                      alignItems: 'center'
-                                    }}>
-                                      <div style={{ 
-                                        width: '10px', 
-                                        height: '10px', 
-                                        borderRadius: '50%', 
-                                        backgroundColor: point.marcado ? '#38a169' : '#cbd5e0', 
-                                        marginRight: '8px' 
-                                      }} />
-                                      <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: '0.8rem', fontWeight: '500', color: point.marcado ? '#2d3748' : '#718096' }}>{point.nombre}</div>
-                                        {point.marcado && (
-                                          <div style={{ fontSize: '0.7rem', color: '#38a169' }}>
-                                            {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                          </div>
-                                        )}
+                                  {roundPoints.map((point: any, index: number) => {
+                                    // Cálculo de Hora Ideal
+                                    let idealTimeStr = "";
+                                    let isLate = false;
+                                    let isEarly = false;
+                                    if (ronda.hora) {
+                                      const [h, m] = ronda.hora.split(':').map(Number);
+                                      const startMins = h * 60 + m;
+                                      let duration = 60;
+                                      if (ronda.hora_fin) {
+                                        const [hE, mE] = ronda.hora_fin.split(':').map(Number);
+                                        let endMins = hE * 60 + mE;
+                                        duration = endMins - startMins;
+                                        if (duration < 0) duration += 1440;
+                                      }
+                                      const total = ronda.total_puntos || roundPoints.length || 1;
+                                      const interval = duration / total;
+                                      const pointTime = startMins + (index * interval);
+                                      const pH = Math.floor(pointTime / 60) % 24;
+                                      const pM = Math.floor(pointTime % 60);
+                                      idealTimeStr = `${pH.toString().padStart(2, '0')}:${pM.toString().padStart(2, '0')}`;
+
+                                      if (point.marcado && point.hora_marcaje) {
+                                        const markedDate = new Date(point.hora_marcaje);
+                                        const markedMins = markedDate.getHours() * 60 + markedDate.getMinutes();
+                                        const diff = markedMins - (pH * 60 + pM);
+                                        if (diff > 10) isLate = true;
+                                        else if (diff < -10) isEarly = true;
+                                      }
+                                    }
+
+                                    return (
+                                      <div key={point.id_punto} style={{ 
+                                        background: 'white', 
+                                        padding: '8px', 
+                                        borderRadius: '6px', 
+                                        border: `1px solid ${point.marcado ? (isLate ? '#feb2b2' : isEarly ? '#90cdf4' : '#c6f6d5') : '#e2e8f0'}`,
+                                        display: 'flex',
+                                        alignItems: 'center'
+                                      }}>
+                                        <div style={{ 
+                                          width: '10px', 
+                                          height: '10px', 
+                                          borderRadius: '50%', 
+                                          backgroundColor: point.marcado ? (isLate ? '#e53e3e' : isEarly ? '#3182ce' : '#38a169') : '#cbd5e0', 
+                                          marginRight: '8px' 
+                                        }} />
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ fontSize: '0.8rem', fontWeight: '500', color: point.marcado ? '#2d3748' : '#718096' }}>{point.nombre}</div>
+                                          <div style={{ fontSize: '0.7rem', color: '#718096' }}>Ideal: {idealTimeStr}</div>
+                                          {point.marcado && (
+                                            <div style={{ fontSize: '0.7rem', color: isLate ? '#e53e3e' : isEarly ? '#3182ce' : '#38a169', fontWeight: (isLate || isEarly) ? 'bold' : 'normal' }}>
+                                              Real: {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                              {isLate && ' (Atrasado)'}
+                                              {isEarly && ' (Anticipado)'}
+                                            </div>
+                                          )}
+                                        </div>
                                       </div>
-                                    </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               )}
                             </td>
@@ -1204,16 +1230,7 @@ const Dashboard: React.FC = () => {
                           </td>
                           <td style={{ padding: '12px', color: '#2d3748', fontWeight: '500' }}>{ronda.nombre_ruta}</td>
                           <td style={{ padding: '12px' }}>
-                            <span style={{
-                              padding: '4px 8px',
-                              borderRadius: '12px',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold',
-                              backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
-                              color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
-                            }}>
-                              {ronda.estado}
-                            </span>
+                            {renderRoundStatus(ronda)}
                           </td>
                           <td style={{ padding: '12px', color: '#4a5568' }}>
                             {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'} pts
@@ -1249,7 +1266,7 @@ const Dashboard: React.FC = () => {
                                         <div style={{ fontSize: '0.8rem', fontWeight: '500', color: point.marcado ? '#2d3748' : '#718096' }}>{point.nombre}</div>
                                         {point.marcado && (
                                           <div style={{ fontSize: '0.7rem', color: '#38a169' }}>
-                                            {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            {new Date(point.hora_marcaje).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
                                           </div>
                                         )}
                                       </div>
@@ -1320,13 +1337,7 @@ const Dashboard: React.FC = () => {
                           {ronda.nombre_guardia ? `${ronda.nombre_guardia} ${ronda.apellido_guardia}` : <span style={{color: '#cbd5e0'}}>Sin asignar</span>}
                         </td>
                         <td style={{ padding: '12px', textAlign: 'center' }}>
-                          <span style={{
-                            padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold',
-                            backgroundColor: ronda.estado === 'COMPLETADA' ? '#c6f6d5' : ronda.estado === 'EN_PROGRESO' ? '#feebc8' : '#edf2f7',
-                            color: ronda.estado === 'COMPLETADA' ? '#2f855a' : ronda.estado === 'EN_PROGRESO' ? '#c05621' : '#718096'
-                          }}>
-                            {ronda.estado}
-                          </span>
+                          {renderRoundStatus(ronda)}
                         </td>
                         <td style={{ padding: '12px', textAlign: 'center', color: '#4a5568' }}>
                           {ronda.puntos_marcados || 0} / {ronda.total_puntos || '?'}
@@ -1438,6 +1449,7 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
       )}
+
     </Layout>
   );
 };

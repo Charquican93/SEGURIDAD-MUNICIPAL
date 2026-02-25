@@ -27,8 +27,8 @@ const finalizarTurno = (req, res) => {
 
 const crearCheck = (req, res) => {
   const { id_guardia, id_puesto, latitud, longitud } = req.body;
-  if (!id_guardia || !id_puesto) return res.status(400).json({ error: 'Faltan datos' });
-  db.query('INSERT INTO checks_presencia (id_guardia, id_puesto, latitud, longitud) VALUES (?, ?, ?, ?)', [id_guardia, id_puesto, latitud, longitud], (err, result) => {
+  if (!id_guardia) return res.status(400).json({ error: 'Faltan datos' });
+  db.query('INSERT INTO checks_presencia (id_guardia, id_puesto, latitud, longitud) VALUES (?, ?, ?, ?)', [id_guardia, id_puesto || null, latitud, longitud], (err, result) => {
     if (err) return res.status(500).json({ error: 'Error check' });
     res.json({ success: true, id_presencia: result.insertId });
   });

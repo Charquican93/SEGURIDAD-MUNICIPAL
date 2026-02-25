@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import axios from 'axios';
@@ -31,6 +32,16 @@ const LiveMap: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Función para personalizar el icono del cluster (Solución a icono invisible)
+  const createClusterCustomIcon = function (cluster: any) {
+    return L.divIcon({
+      // Renderizamos un círculo azul con el número de guardias dentro
+      html: `<div style="display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #4299e1 0%, #2b6cb0 100%); color: white; width: 40px; height: 40px; border-radius: 50%; font-weight: bold; border: 3px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-family: sans-serif; font-size: 1rem;">${cluster.getChildCount()}</div>`,
+      className: 'custom-marker-cluster', // Clase personalizada para evitar estilos por defecto de Leaflet
+      iconSize: L.point(40, 40, true),
+    });
   };
 
   useEffect(() => {
@@ -87,47 +98,52 @@ const LiveMap: React.FC = () => {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             />
             
-            {guards.map((guard) => (
-              guard.latitud && guard.longitud && (
-                <Marker key={guard.id_guardia} position={[guard.latitud, guard.longitud]}>
-                  <Popup>
-                    <div style={{ textAlign: 'center', minWidth: '150px' }}>
-                      <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1rem', marginBottom: '5px' }}>
-                        {guard.nombre} {guard.apellido}
-                      </div>
-                      
-                      <div style={{ marginBottom: '8px', padding: '8px', background: '#f0fff4', borderRadius: '6px', border: '1px solid #c6f6d5' }}>
-                        <div style={{ fontSize: '0.7rem', color: '#2f855a', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '2px' }}>Rondas de Hoy</div>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#22543d' }}>
-                          {guard.rondas_completadas || 0} / {guard.total_rondas || 0} Completadas
+            <MarkerClusterGroup 
+              chunkedLoading 
+              iconCreateFunction={createClusterCustomIcon}
+            >
+              {guards.map((guard) => (
+                guard.latitud && guard.longitud && (
+                  <Marker key={guard.id_guardia} position={[guard.latitud, guard.longitud]}>
+                    <Popup>
+                      <div style={{ textAlign: 'center', minWidth: '150px' }}>
+                        <div style={{ fontWeight: 'bold', color: '#2d3748', fontSize: '1rem', marginBottom: '5px' }}>
+                          {guard.nombre} {guard.apellido}
                         </div>
-                      </div>
+                        
+                        <div style={{ marginBottom: '8px', padding: '8px', background: '#f0fff4', borderRadius: '6px', border: '1px solid #c6f6d5' }}>
+                          <div style={{ fontSize: '0.7rem', color: '#2f855a', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '2px' }}>Rondas de Hoy</div>
+                          <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#22543d' }}>
+                            {guard.rondas_completadas || 0} / {guard.total_rondas || 0} Completadas
+                          </div>
+                        </div>
 
-                      <div style={{ fontSize: '0.85rem', color: '#718096', marginBottom: '8px' }}>
-                        Último reporte: {new Date(guard.fecha_hora).toLocaleTimeString()}
+                        <div style={{ fontSize: '0.85rem', color: '#718096', marginBottom: '8px' }}>
+                          Último reporte: {new Date(guard.fecha_hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                        </div>
+                        <a 
+                          href={`https://www.google.com/maps?q=${guard.latitud},${guard.longitud}`} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          style={{ 
+                            display: 'inline-block',
+                            padding: '4px 8px',
+                            background: '#e53e3e',
+                            color: 'white',
+                            textDecoration: 'none',
+                            borderRadius: '4px',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          Ver en Google Maps
+                        </a>
                       </div>
-                      <a 
-                        href={`https://www.google.com/maps?q=${guard.latitud},${guard.longitud}`} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        style={{ 
-                          display: 'inline-block',
-                          padding: '4px 8px',
-                          background: '#e53e3e',
-                          color: 'white',
-                          textDecoration: 'none',
-                          borderRadius: '4px',
-                          fontSize: '0.75rem',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        Ver en Google Maps
-                      </a>
-                    </div>
-                  </Popup>
-                </Marker>
-              )
-            ))}
+                    </Popup>
+                  </Marker>
+                )
+              ))}
+            </MarkerClusterGroup>
           </MapContainer>
         </div>
       </div>

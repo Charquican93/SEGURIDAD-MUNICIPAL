@@ -5,6 +5,8 @@ import History from './components/History';
 import LiveMap from './components/LiveMap';
 import Messages from './components/Messages';
 import Statistics from './components/Statistics';
+import ShiftPlanning from './components/ShiftPlanning';
+import ShiftHistory from './components/ShiftHistory';
 
 
 function App() {
@@ -31,6 +33,13 @@ function App() {
 
         {/* Ruta de Estadísticas */}
         <Route path="/estadisticas" element={<Statistics />} />
+        
+        {/* Ruta de Planificacion */}
+        <Route path="/planificacion" element={<ShiftPlanning />} />
+
+        {/* Ruta de Historial de Turnos */}
+        <Route path="/turnos" element={<ShiftHistory />} />
+
       </Routes>
     </Router>
   )

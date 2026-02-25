@@ -64,14 +64,15 @@ const registrarMarcaje = async (req, res) => {
 };
 
 const obtenerRondas = (req, res) => {
-  const { id_guardia, id_puesto, fecha, periodo, estado } = req.query;
-  let query = `SELECT r.*, ru.nombre as nombre_ruta, ru.descripcion, g.nombre as nombre_guardia, g.apellido as apellido_guardia, (SELECT COUNT(*) FROM puntos_control pc WHERE pc.id_ruta = r.id_ruta) as total_puntos, (SELECT COUNT(DISTINCT mp.id_punto) FROM marcajes_puntos mp WHERE mp.id_ronda = r.id_ronda) as puntos_marcados FROM rondas r LEFT JOIN rutas ru ON r.id_ruta = ru.id_ruta LEFT JOIN guardias g ON r.id_guardia = g.id_guardia`;
+  const { id_guardia, id_puesto, fecha, fecha_inicio, fecha_fin, periodo, estado } = req.query;
+  let query = `SELECT r.*, ru.nombre as nombre_ruta, ru.descripcion, ru.id_puesto, g.nombre as nombre_guardia, g.apellido as apellido_guardia, (SELECT COUNT(*) FROM puntos_control pc WHERE pc.id_ruta = r.id_ruta) as total_puntos, (SELECT COUNT(DISTINCT mp.id_punto) FROM marcajes_puntos mp WHERE mp.id_ronda = r.id_ronda) as puntos_marcados FROM rondas r LEFT JOIN rutas ru ON r.id_ruta = ru.id_ruta LEFT JOIN guardias g ON r.id_guardia = g.id_guardia`;
   const params = [];
   const conditions = [];
 
   if (id_guardia) { conditions.push('r.id_guardia = ?'); params.push(id_guardia); }
   if (id_puesto) { conditions.push('ru.id_puesto = ?'); params.push(id_puesto); }
-  if (periodo === 'hoy') conditions.push('DATE(r.fecha) = CURDATE()');
+  if (fecha_inicio && fecha_fin) { conditions.push('r.fecha BETWEEN ? AND ?'); params.push(fecha_inicio, fecha_fin); }
+  else if (periodo === 'hoy') conditions.push('DATE(r.fecha) = CURDATE()');
   else if (periodo === 'ayer') conditions.push('DATE(r.fecha) = SUBDATE(CURDATE(), 1)');
   else if (periodo === 'semana') conditions.push('r.fecha >= SUBDATE(CURDATE(), 7)');
   else if (periodo === 'mes') conditions.push('r.fecha >= SUBDATE(CURDATE(), 30)');
@@ -101,12 +102,109 @@ const obtenerPuntosRonda = (req, res) => {
   db.query('SELECT id_ruta FROM rondas WHERE id_ronda = ?', [id], (err, results) => {
     if (err || results.length === 0) return res.status(404).json({ error: 'Ronda no encontrada' });
     const id_ruta = results[0].id_ruta;
-    const query = `SELECT pc.id_punto, pc.nombre, pc.descripcion, CASE WHEN mp.id_marcaje IS NOT NULL THEN 1 ELSE 0 END as marcado, mp.fecha_hora as hora_marcaje FROM puntos_control pc LEFT JOIN marcajes_puntos mp ON pc.id_punto = mp.id_punto AND mp.id_ronda = ? WHERE pc.id_ruta = ? ORDER BY pc.id_punto ASC`;
+    // Modificamos la consulta para traer las coordenadas esperadas (pc) y las reales (mp)
+    const query = `SELECT pc.id_punto, pc.nombre, pc.descripcion, pc.latitud_esperada, pc.longitud_esperada, pc.radio_tolerancia, mp.latitud as lat_real, mp.longitud as lon_real, CASE WHEN mp.id_marcaje IS NOT NULL THEN 1 ELSE 0 END as marcado, mp.fecha_hora as hora_marcaje FROM puntos_control pc LEFT JOIN marcajes_puntos mp ON pc.id_punto = mp.id_punto AND mp.id_ronda = ? WHERE pc.id_ruta = ? ORDER BY pc.id_punto ASC`;
+    
     db.query(query, [id, id_ruta], (errPoints, points) => {
       if (errPoints) return res.status(500).json({ error: 'Error al obtener puntos' });
-      res.json(points);
+      
+      // Procesamos cada punto para calcular la distancia y el estado GPS
+      const puntosProcesados = points.map(p => {
+        let distancia = 0;
+        let estado_gps = 'PENDIENTE';
+
+        if (p.marcado) {
+          if (p.latitud_esperada && p.longitud_esperada && p.lat_real && p.lon_real) {
+            distancia = getDistanceFromLatLonInMeters(p.lat_real, p.lon_real, p.latitud_esperada, p.longitud_esperada);
+            const tolerancia = p.radio_tolerancia || 30; // Usar tolerancia del punto o 30m por defecto
+            estado_gps = distancia <= tolerancia ? 'OK' : 'FUERA_RANGO';
+          } else {
+            estado_gps = 'SIN_GPS'; // Marcado pero sin datos de ubicación para comparar
+          }
+        }
+
+        return { ...p, distancia: Math.round(distancia), estado_gps };
+      });
+
+      res.json(puntosProcesados);
     });
   });
 };
 
-module.exports = { registrarMarcaje, obtenerRondas, actualizarEstadoRonda, obtenerPuntosRonda };
+const crearRonda = async (req, res) => {
+  let { id_guardia, id_ruta, id_puesto, fecha, hora, hora_fin, estado } = req.body;
+
+  if (!id_guardia || (!id_ruta && !id_puesto) || !fecha || !hora) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  }
+
+  try {
+    // LÓGICA DE RESOLUCIÓN DE RUTA (Corrección para confusión Puesto vs Ruta)
+    
+    // Caso 1: Si el frontend envía explícitamente id_puesto en lugar de id_ruta
+    if (!id_ruta && id_puesto) {
+      const [rutas] = await db.promise().query('SELECT id_ruta FROM rutas WHERE id_puesto = ? LIMIT 1', [id_puesto]);
+      if (rutas.length > 0) id_ruta = rutas[0].id_ruta;
+      else return res.status(400).json({ error: 'El puesto seleccionado no tiene rutas asignadas.' });
+    }
+    // Caso 2: Si envía un ID en id_ruta, verificamos si es válido o si es un ID de Puesto camuflado
+    else if (id_ruta) {
+      const [rutaExiste] = await db.promise().query('SELECT id_ruta FROM rutas WHERE id_ruta = ?', [id_ruta]);
+      
+      if (rutaExiste.length === 0) {
+        // No existe la ruta. Verificamos si el ID corresponde a un Puesto que tenga ruta
+        const [rutasDelPuesto] = await db.promise().query('SELECT id_ruta FROM rutas WHERE id_puesto = ? LIMIT 1', [id_ruta]);
+        if (rutasDelPuesto.length > 0) {
+          id_ruta = rutasDelPuesto[0].id_ruta; // ¡Corregido! Usamos la ruta real del puesto
+        } else {
+          return res.status(400).json({ error: `No se encontró la Ruta ID ${id_ruta} ni un puesto asociado con ese ID.` });
+        }
+      }
+    }
+
+    const [result] = await db.promise().query(
+      'INSERT INTO rondas (id_guardia, id_ruta, fecha, hora, hora_fin, estado) VALUES (?, ?, ?, ?, ?, ?)',
+      [id_guardia, id_ruta, fecha, hora, hora_fin || null, estado || 'PENDIENTE']
+    );
+
+    res.json({ 
+      message: 'Ronda programada exitosamente', 
+      id_ronda: result.insertId 
+    });
+  } catch (error) {
+    console.error('Error al crear ronda:', error);
+    res.status(500).json({ error: 'Error al programar la ronda: ' + error.message });
+  }
+};
+
+const eliminarRonda = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Primero eliminamos los marcajes asociados para evitar error de llave foránea
+    await db.promise().query('DELETE FROM marcajes_puntos WHERE id_ronda = ?', [id]);
+    await db.promise().query('DELETE FROM rondas WHERE id_ronda = ?', [id]);
+    res.json({ message: 'Ronda eliminada correctamente' });
+  } catch (error) {
+    console.error('Error al eliminar ronda:', error);
+    res.status(500).json({ error: 'Error al eliminar la ronda' });
+  }
+};
+
+const editarRonda = async (req, res) => {
+  const { id } = req.params;
+  const { id_guardia, id_ruta, fecha, hora, hora_fin } = req.body;
+
+  try {
+    await db.promise().query(
+      'UPDATE rondas SET id_guardia = ?, id_ruta = ?, fecha = ?, hora = ?, hora_fin = ? WHERE id_ronda = ?',
+      [id_guardia, id_ruta, fecha, hora, hora_fin || null, id]
+    );
+    res.json({ message: 'Ronda actualizada correctamente' });
+  } catch (error) {
+    console.error('Error al editar ronda:', error);
+    res.status(500).json({ error: 'Error al editar la ronda' });
+  }
+};
+
+module.exports = { registrarMarcaje, obtenerRondas, actualizarEstadoRonda, obtenerPuntosRonda, crearRonda, eliminarRonda, editarRonda };
