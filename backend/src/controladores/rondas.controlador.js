@@ -144,8 +144,13 @@ const crearRonda = async (req, res) => {
     // Caso 1: Si el frontend envía explícitamente id_puesto en lugar de id_ruta
     if (!id_ruta && id_puesto) {
       const [rutas] = await db.promise().query('SELECT id_ruta FROM rutas WHERE id_puesto = ? LIMIT 1', [id_puesto]);
-      if (rutas.length > 0) id_ruta = rutas[0].id_ruta;
-      else return res.status(400).json({ error: 'El puesto seleccionado no tiene rutas asignadas.' });
+      if (rutas.length > 0) {
+        id_ruta = rutas[0].id_ruta;
+      } else {
+        // AUTO-CREAR RUTA: Si el puesto no tiene ruta, creamos una por defecto para evitar bloqueo
+        const [newRoute] = await db.promise().query('INSERT INTO rutas (nombre, descripcion, id_puesto) VALUES (?, ?, ?)', [`Ruta Puesto ${id_puesto}`, 'Ruta generada automáticamente', id_puesto]);
+        id_ruta = newRoute.insertId;
+      }
     }
     // Caso 2: Si envía un ID en id_ruta, verificamos si es válido o si es un ID de Puesto camuflado
     else if (id_ruta) {
@@ -157,7 +162,15 @@ const crearRonda = async (req, res) => {
         if (rutasDelPuesto.length > 0) {
           id_ruta = rutasDelPuesto[0].id_ruta; // ¡Corregido! Usamos la ruta real del puesto
         } else {
-          return res.status(400).json({ error: `No se encontró la Ruta ID ${id_ruta} ni un puesto asociado con ese ID.` });
+           // Verificamos si el ID corresponde a un Puesto válido sin rutas
+           const [puestoExiste] = await db.promise().query('SELECT id_puesto FROM puestos WHERE id_puesto = ?', [id_ruta]);
+           if (puestoExiste.length > 0) {
+               // Es un puesto válido, le creamos su primera ruta
+               const [newRoute] = await db.promise().query('INSERT INTO rutas (nombre, descripcion, id_puesto) VALUES (?, ?, ?)', [`Ruta Puesto ${id_ruta}`, 'Ruta generada automáticamente', id_ruta]);
+               id_ruta = newRoute.insertId;
+           } else {
+               return res.status(400).json({ error: `No se encontró la Ruta ID ${id_ruta} ni un puesto asociado con ese ID.` });
+           }
         }
       }
     }
@@ -193,9 +206,16 @@ const eliminarRonda = async (req, res) => {
 
 const editarRonda = async (req, res) => {
   const { id } = req.params;
-  const { id_guardia, id_ruta, fecha, hora, hora_fin } = req.body;
+  let { id_guardia, id_ruta, id_puesto, fecha, hora, hora_fin } = req.body;
 
   try {
+    // Si viene id_puesto pero no id_ruta, buscamos la ruta asociada
+    if (!id_ruta && id_puesto) {
+      const [rutas] = await db.promise().query('SELECT id_ruta FROM rutas WHERE id_puesto = ? LIMIT 1', [id_puesto]);
+      if (rutas.length > 0) id_ruta = rutas[0].id_ruta;
+      else return res.status(400).json({ error: 'El puesto seleccionado no tiene rutas asignadas.' });
+    }
+
     await db.promise().query(
       'UPDATE rondas SET id_guardia = ?, id_ruta = ?, fecha = ?, hora = ?, hora_fin = ? WHERE id_ronda = ?',
       [id_guardia, id_ruta, fecha, hora, hora_fin || null, id]

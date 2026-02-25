@@ -61,7 +61,11 @@ const ShiftPlanning: React.FC = () => {
     try {
       // Consultamos las rondas existentes para esa fecha
       const response = await axios.get(`${API_URL}/rondas?fecha=${selectedDate}`);
-      setDailyRounds(response.data);
+      // Ordenamos por ID descendente para que las últimas agregadas aparezcan primero
+      const sortedRounds = Array.isArray(response.data) 
+        ? response.data.sort((a: any, b: any) => b.id_ronda - a.id_ronda)
+        : [];
+      setDailyRounds(sortedRounds);
     } catch (error) {
       console.error('Error fetching rounds for date:', error);
       setDailyRounds([]);
@@ -116,7 +120,7 @@ const ShiftPlanning: React.FC = () => {
             // Si estamos editando, la primera iteración actualiza la ronda existente
             requests.push(axios.put(`${API_URL}/rondas/${editingRoundId}`, {
               id_guardia: selectedGuardia,
-              id_ruta: selectedRuta,
+              id_puesto: selectedRuta, // Enviamos id_puesto explícitamente
               fecha: roundDate,
               hora: startTime,
               hora_fin: endTime
@@ -125,7 +129,7 @@ const ShiftPlanning: React.FC = () => {
             // Las demás iteraciones (o todas si es nuevo) crean rondas nuevas
             requests.push(axios.post(`${API_URL}/rondas`, {
                 id_guardia: selectedGuardia,
-                id_ruta: selectedRuta,
+                id_puesto: selectedRuta, // Enviamos id_puesto explícitamente
                 fecha: roundDate,
                 hora: startTime,
                 hora_fin: endTime,
