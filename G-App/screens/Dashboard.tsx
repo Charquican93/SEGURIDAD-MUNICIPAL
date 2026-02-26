@@ -225,8 +225,23 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
            }
         } else {
            // 3. (CORRECCIÓN) Si no tiene puesto fijo, buscamos en las rondas de HOY (Asignación por Planificación)
-           const roundsRes = await fetch(`${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=hoy`);
+           // Usamos rango de fechas explícito (Hoy + Mañana) para evitar problemas de zona horaria con el servidor
+           const now = new Date();
+           const formatDate = (d: Date) => {
+               const year = d.getFullYear();
+               const month = String(d.getMonth() + 1).padStart(2, '0');
+               const day = String(d.getDate()).padStart(2, '0');
+               return `${year}-${month}-${day}`;
+           };
+           const start = formatDate(now);
+           const tmrw = new Date(now);
+           tmrw.setDate(tmrw.getDate() + 1);
+           const end = formatDate(tmrw);
+
+           const roundsRes = await fetch(`${API_URL}/rondas?id_guardia=${user.id_guardia}&fecha_inicio=${start}&fecha_fin=${end}`);
            let foundInRounds = false;
+           let shouldClearPuesto = false; // Flag para decidir si limpiamos (solo si la respuesta es exitosa y vacía)
+
            if (roundsRes.ok) {
               const roundsData = await roundsRes.json();
               // Buscamos el primer id_puesto válido en las rondas (o id_ruta si se usa como puesto)
@@ -234,22 +249,42 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
               if (roundWithPuesto) {
                  const targetId = roundWithPuesto.id_puesto || roundWithPuesto.id_ruta;
                  // Solo hacemos fetch si no tenemos puesto o es diferente al encontrado
-                 if (!puesto || puesto.id_puesto !== targetId) {
-                     const puestoRes = await fetch(`${API_URL}/puestos/${targetId}`);
-                     if (puestoRes.ok) {
-                       const puestoData = await puestoRes.json();
-                       setPuesto(puestoData);
-                       foundInRounds = true;
+                 if (!puesto || String(puesto.id_puesto) !== String(targetId)) {
+                     // Intentamos obtener el puesto específico. Si falla, usamos fallback de lista completa.
+                     try {
+                        let puestoData = null;
+                        const puestoRes = await fetch(`${API_URL}/puestos/${targetId}`);
+                        if (puestoRes.ok) {
+                            puestoData = await puestoRes.json();
+                        } else {
+                            // Fallback: Obtener todos los puestos y buscar localmente
+                            const allPuestosRes = await fetch(`${API_URL}/puestos`);
+                            if (allPuestosRes.ok) {
+                                const allPuestos = await allPuestosRes.json();
+                                puestoData = allPuestos.find((p: any) => String(p.id_puesto) === String(targetId));
+                            }
+                        }
+
+                        if (puestoData) {
+                            setPuesto(puestoData);
+                            foundInRounds = true;
+                        }
+                     } catch (e) {
+                        console.log("Error recuperando detalles del puesto:", e);
                      }
                  } else {
                      foundInRounds = true; // Ya tenemos el puesto correcto cargado
                  }
               }
+              
+              // Si la respuesta fue OK pero no encontramos puesto en las rondas, marcamos para limpiar
+              if (!foundInRounds && roundsData.length === 0) {
+                  shouldClearPuesto = true;
+              }
            }
            
-           // Solo si no tiene puesto fijo NI rondas con puesto, Y NO ESTÁ ACTIVO, limpiamos.
-           // Si está activo, preferimos mantener el puesto "viejo" a dejarlo sin nada.
-           if (!foundInRounds && puesto && !isActiveOnServer) setPuesto(undefined);
+           // Solo limpiamos si el servidor confirmó que no hay rondas Y no estamos activos
+           if (shouldClearPuesto && puesto && !isActiveOnServer && !isActive) setPuesto(undefined);
         }
       }
     } catch (e) {
@@ -441,14 +476,30 @@ const Dashboard = ({ onToggleTurn, onStartTurn }: { onToggleTurn?: () => void; o
 
   const fetchRounds = async () => {
     try {
-      // Filtramos por el guardia actual Y el puesto actual para evitar mezclar rondas
-      let roundsUrl = `${API_URL}/rondas?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
-      if (puesto && puesto.id_puesto) {
-        roundsUrl += `&id_puesto=${puesto.id_puesto}`;
-      }
+      // Filtramos solo por el guardia actual para ver todas sus rondas asignadas
+      let roundsUrl = `${API_URL}/rondas?id_guardia=${user.id_guardia}`;
+      let turnsUrl = `${API_URL}/turnos?id_guardia=${user.id_guardia}`;
       
-      // También traemos el historial de turnos para intercalar los eventos de Inicio/Fin
-      const turnsUrl = `${API_URL}/turnos?id_guardia=${user.id_guardia}&periodo=${periodFilter}`;
+      if (periodFilter === 'hoy') {
+        const now = new Date();
+        const formatDate = (d: Date) => {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+        const start = formatDate(now);
+        const tmrw = new Date(now);
+        tmrw.setDate(tmrw.getDate() + 1);
+        const end = formatDate(tmrw);
+        
+        const queryParams = `&fecha_inicio=${start}&fecha_fin=${end}`;
+        roundsUrl += queryParams;
+        turnsUrl += queryParams;
+      } else {
+        roundsUrl += `&periodo=${periodFilter}`;
+        turnsUrl += `&periodo=${periodFilter}`;
+      }
 
       const [resRounds, resTurns] = await Promise.all([
         fetch(roundsUrl),

@@ -3,7 +3,7 @@ const db = require('../config/db');
 // Obtener historial de turnos con detalles de cumplimiento
 const obtenerTurnos = async (req, res) => {
   try {
-    const { fecha_inicio, fecha_fin, estado, search, periodo } = req.query;
+    const { fecha_inicio, fecha_fin, estado, search, periodo, id_guardia } = req.query;
     
     let query = `
       SELECT 
@@ -42,6 +42,12 @@ const obtenerTurnos = async (req, res) => {
     `;
     
     const params = [];
+
+    // Filtro por Guardia
+    if (id_guardia) {
+      query += ` AND t.id_guardia = ?`;
+      params.push(id_guardia);
+    }
 
     // Filtro por Fechas
     if (fecha_inicio && fecha_fin) {

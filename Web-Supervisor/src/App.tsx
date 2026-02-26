@@ -7,6 +7,7 @@ import Messages from './components/Messages';
 import Statistics from './components/Statistics';
 import ShiftPlanning from './components/ShiftPlanning';
 import ShiftHistory from './components/ShiftHistory';
+import ExportReports from './components/ExportReports';
 
 
 function App() {
@@ -39,6 +40,9 @@ function App() {
 
         {/* Ruta de Historial de Turnos */}
         <Route path="/turnos" element={<ShiftHistory />} />
+
+        {/* Ruta de Exportación de Reportes */}
+        <Route path="/exportar" element={<ExportReports />} />
 
       </Routes>
     </Router>

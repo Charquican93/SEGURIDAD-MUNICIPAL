@@ -54,6 +54,18 @@ const Dashboard: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [showEventModal, setShowEventModal] = useState(false);
 
+  // Nuevos estados para filtros independientes
+  const [checkPeriod, setCheckPeriod] = useState<'hoy' | 'semana' | 'mes'>('hoy');
+  const [eventPeriod, setEventPeriod] = useState<'hoy' | 'semana' | 'mes'>('hoy');
+  const [alertPeriod, setAlertPeriod] = useState<'hoy' | 'semana' | 'mes'>('hoy');
+  const [alertSearch, setAlertSearch] = useState('');
+
+  // Estados para paginación
+  const [checksPage, setChecksPage] = useState(1);
+  const [alertsPage, setAlertsPage] = useState(1);
+  const [eventsPage, setEventsPage] = useState(1);
+  const ITEMS_PER_PAGE = 5; // Cantidad de registros por página
+
   // Referencias para el arrastre (drag-to-scroll) en Puestos
   const puestosContainerRef = useRef<HTMLDivElement>(null);
   const guardiasContainerRef = useRef<HTMLDivElement>(null);
@@ -62,6 +74,72 @@ const Dashboard: React.FC = () => {
   const scrollLeftRef = useRef(0);
   const isDraggingRef = useRef(false);
 
+  // Helper para calcular fechas y evitar problemas de zona horaria (Fix para filtros)
+  const getDateParams = (period: string) => {
+    const now = new Date();
+    const formatDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const tmrw = new Date(now);
+    tmrw.setDate(tmrw.getDate() + 1);
+    const tomorrowStr = formatDate(tmrw);
+    const todayStr = formatDate(now);
+
+    if (period === 'hoy') {
+      return { fecha_inicio: todayStr, fecha_fin: tomorrowStr };
+    } 
+    if (period === 'semana') {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      return { fecha_inicio: formatDate(weekAgo), fecha_fin: tomorrowStr };
+    } 
+    if (period === 'mes') {
+      const monthAgo = new Date(now);
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      return { fecha_inicio: formatDate(monthAgo), fecha_fin: tomorrowStr };
+    }
+    return {};
+  };
+
+  // Helper para filtrar datos en el cliente (Asegura que el filtro funcione visualmente)
+  const filterDataClientSide = (data: any[], period: string, dateField: string) => {
+    if (!Array.isArray(data)) return [];
+    
+    const now = new Date();
+    // Normalizamos "hoy" al inicio del día local (00:00:00)
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+    return data.filter(item => {
+      if (!item[dateField]) return false;
+      
+      // Manejo robusto de fechas (ISO string o YYYY-MM-DD)
+      let itemDate = new Date(item[dateField]);
+      // Si es solo fecha YYYY-MM-DD (como en eventos), forzamos interpretación local
+      if (dateField === 'date' && typeof item[dateField] === 'string' && item[dateField].length === 10) {
+         const [y, m, d] = item[dateField].split('-').map(Number);
+         itemDate = new Date(y, m - 1, d);
+      }
+
+      if (period === 'hoy') return itemDate >= todayStart && itemDate < todayEnd;
+      if (period === 'semana') {
+        const weekAgo = new Date(todayStart);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        return itemDate >= weekAgo;
+      }
+      if (period === 'mes') {
+        const monthAgo = new Date(todayStart);
+        monthAgo.setDate(monthAgo.getDate() - 30);
+        return itemDate >= monthAgo;
+      }
+      return true;
+    });
+  };
+
   const fetchData = async () => {
     // 1. Cargar estadísticas
     try {
@@ -69,14 +147,6 @@ const Dashboard: React.FC = () => {
       setStats(response.data);
     } catch (error) {
       console.error('Error fetching stats:', error);
-    }
-
-    // 2. Cargar alertas
-    try {
-      const response = await axios.get(`${API_URL}/dashboard/alerts`);
-      setAlerts(response.data);
-    } catch (error) {
-      console.error('Error fetching alerts:', error);
     }
 
     // 4. Cargar puestos y guardias por separado
@@ -93,12 +163,25 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const fetchAlerts = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/dashboard/alerts`, {
+        params: { search: alertSearch, periodo: alertPeriod, ...getDateParams(alertPeriod) }
+      });
+      // Filtramos en cliente para garantizar exactitud
+      setAlerts(filterDataClientSide(response.data, alertPeriod, 'fecha_hora'));
+    } catch (error) {
+      console.error('Error fetching alerts:', error);
+    }
+  };
+
   const fetchEvents = async () => {
     try {
       const response = await axios.get(`${API_URL}/dashboard/events`, {
-        params: { search: eventSearch }
+        params: { search: eventSearch, periodo: eventPeriod, ...getDateParams(eventPeriod) }
       });
-      setEvents(response.data);
+      // Filtramos en cliente (campo 'date' suele ser YYYY-MM-DD)
+      setEvents(filterDataClientSide(response.data, eventPeriod, 'date'));
     } catch (error) {
       console.error('Error fetching events:', error);
     }
@@ -107,9 +190,10 @@ const Dashboard: React.FC = () => {
   const fetchChecks = async () => {
     try {
       const response = await axios.get(`${API_URL}/checks`, {
-        params: { search: checkSearch }
+        params: { search: checkSearch, periodo: checkPeriod, ...getDateParams(checkPeriod) }
       });
-      setGlobalChecks(response.data);
+      // Filtramos en cliente
+      setGlobalChecks(filterDataClientSide(response.data, checkPeriod, 'fecha_hora'));
     } catch (error) {
       console.error('Error fetching checks:', error);
     }
@@ -117,26 +201,49 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    // Actualizar cada 30 segundos
+  }, []);
+
+  // Intervalo para datos estáticos (Stats, Puestos, Guardias)
+  useEffect(() => {
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
 
-  // useEffect para buscar eventos con debounce
+  // Intervalo para datos filtrados (Alertas, Eventos, Checks) - Se recrea al cambiar filtros para usar el estado actual
   useEffect(() => {
-    const debounceTimer = setTimeout(() => {
+    const interval = setInterval(() => {
+      fetchAlerts();
       fetchEvents();
-    }, 300); // Espera 300ms después de que el usuario deja de escribir
-    return () => clearTimeout(debounceTimer);
-  }, [eventSearch]);
-
-  // useEffect para buscar checks con debounce
-  useEffect(() => {
-    const debounceTimer = setTimeout(() => {
       fetchChecks();
-    }, 300);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [alertSearch, alertPeriod, eventSearch, eventPeriod, checkSearch, checkPeriod]);
+
+  // Effects para filtros (Debounce y recarga al cambiar periodo)
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => fetchEvents(), 300);
+    setEventsPage(1); // Resetear página al filtrar
     return () => clearTimeout(debounceTimer);
-  }, [checkSearch]);
+  }, [eventSearch, eventPeriod]);
+
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => fetchChecks(), 300);
+    setChecksPage(1); // Resetear página al filtrar
+    return () => clearTimeout(debounceTimer);
+  }, [checkSearch, checkPeriod]);
+
+  useEffect(() => {
+    const debounceTimer = setTimeout(() => fetchAlerts(), 300);
+    setAlertsPage(1); // Resetear página al filtrar
+    return () => clearTimeout(debounceTimer);
+  }, [alertSearch, alertPeriod]);
+
+  // Estilo reutilizable para botones de filtro pequeños
+  const getFilterButtonStyle = (isActive: boolean) => ({
+    padding: '4px 8px', fontSize: '0.7rem', borderRadius: '4px',
+    border: isActive ? 'none' : '1px solid #e2e8f0', backgroundColor: isActive ? '#3182ce' : 'white',
+    color: isActive ? 'white' : '#718096', cursor: 'pointer', fontWeight: 'bold' as const
+  });
 
   const handleGuardClick = async (guard: any) => {
     setSelectedGuard(guard);
@@ -301,6 +408,38 @@ const Dashboard: React.FC = () => {
   const handleEventClick = (event: any) => {
     setSelectedEvent(event);
     setShowEventModal(true);
+  };
+
+  // Helper para paginación
+  const paginate = (data: any[], page: number) => {
+    const start = (page - 1) * ITEMS_PER_PAGE;
+    return data.slice(start, start + ITEMS_PER_PAGE);
+  };
+
+  // Renderizador de controles de paginación
+  const renderPagination = (currentPage: number, totalItems: number, setPage: (p: number) => void) => {
+    const totalPages = Math.ceil(totalItems / ITEMS_PER_PAGE);
+    if (totalPages <= 1) return null;
+
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginTop: '15px', alignItems: 'center' }}>
+        <button 
+          onClick={() => setPage(Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1}
+          style={{ padding: '4px 8px', border: '1px solid #cbd5e0', borderRadius: '4px', background: currentPage === 1 ? '#f7fafc' : 'white', cursor: currentPage === 1 ? 'default' : 'pointer', color: currentPage === 1 ? '#cbd5e0' : '#4a5568', fontWeight: 'bold' }}
+        >
+          &lt;
+        </button>
+        <span style={{ fontSize: '0.8rem', color: '#718096' }}>{currentPage} de {totalPages}</span>
+        <button 
+          onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+          disabled={currentPage === totalPages}
+          style={{ padding: '4px 8px', border: '1px solid #cbd5e0', borderRadius: '4px', background: currentPage === totalPages ? '#f7fafc' : 'white', cursor: currentPage === totalPages ? 'default' : 'pointer', color: currentPage === totalPages ? '#cbd5e0' : '#4a5568', fontWeight: 'bold' }}
+        >
+          &gt;
+        </button>
+      </div>
+    );
   };
 
   // Calcular porcentaje actual basado en el periodo seleccionado
@@ -625,8 +764,15 @@ const Dashboard: React.FC = () => {
         {/* 1. Tabla de Checks de Presencia */}
         <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h3 style={{ margin: 0, color: '#4a5568' }}>Checks de Presencia</h3>
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, color: '#4a5568', fontSize: '1.1rem' }}>Checks de Presencia</h3>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button onClick={() => setCheckPeriod('hoy')} style={getFilterButtonStyle(checkPeriod === 'hoy')}>Hoy</button>
+              <button onClick={() => setCheckPeriod('semana')} style={getFilterButtonStyle(checkPeriod === 'semana')}>Sem</button>
+              <button onClick={() => setCheckPeriod('mes')} style={getFilterButtonStyle(checkPeriod === 'mes')}>Mes</button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '15px' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
               <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#a0aec0', zIndex: 1 }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
               </span>
@@ -639,8 +785,8 @@ const Dashboard: React.FC = () => {
                   padding: '6px 30px 6px 35px',
                   borderRadius: '8px',
                   border: '1px solid #cbd5e0',
-                  fontSize: '0.8rem',
-                  width: '140px',
+                  fontSize: '0.85rem',
+                  width: '100%',
                   boxSizing: 'border-box'
                 }}
               />
@@ -659,7 +805,7 @@ const Dashboard: React.FC = () => {
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <tbody>
-                {globalChecks.map((check: any) => (
+                {paginate(globalChecks, checksPage).map((check: any) => (
                   <tr key={check.id_presencia} style={{ borderBottom: '1px solid #edf2f7' }}>
                     <td style={{ padding: '10px 0', color: '#2d3748' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -711,18 +857,49 @@ const Dashboard: React.FC = () => {
               </tbody>
             </table>
           )}
+          {renderPagination(checksPage, globalChecks.length, setChecksPage)}
         </div>
 
         {/* 2. Tabla de Últimas Alertas */}
         <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
-          {/*<h3 style={{ marginTop: 0, color: '#4a5568' }}>Últimas Alertas</h3>*/}
-          <h3 style={{ marginTop: 0, color: '#e53e3e' }}>Últimas Alertas de Pánico</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+            <h3 style={{ margin: 0, color: '#e53e3e', fontSize: '1.1rem' }}>Alertas de Pánico</h3>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button onClick={() => setAlertPeriod('hoy')} style={getFilterButtonStyle(alertPeriod === 'hoy')}>Hoy</button>
+              <button onClick={() => setAlertPeriod('semana')} style={getFilterButtonStyle(alertPeriod === 'semana')}>Sem</button>
+              <button onClick={() => setAlertPeriod('mes')} style={getFilterButtonStyle(alertPeriod === 'mes')}>Mes</button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '15px' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#a0aec0', zIndex: 1 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              </span>
+              <input
+                type="text"
+                placeholder="Buscar alerta..."
+                value={alertSearch}
+                onChange={(e) => setAlertSearch(e.target.value)}
+                style={{
+                  padding: '6px 30px 6px 35px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e0',
+                  fontSize: '0.85rem',
+                  width: '100%',
+                  boxSizing: 'border-box'
+                }}
+              />
+              {alertSearch && (
+                <button onClick={() => setAlertSearch('')} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 0 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+              )}
+            </div>
+          </div>
           {alerts.length === 0 ? (
             <p style={{ color: '#718096' }}>No hay alertas recientes.</p>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <tbody>
-                {alerts.map((alert: any, index) => (
+                {paginate(alerts, alertsPage).map((alert: any, index) => (
                   <tr key={index} className={new Date(alert.fecha_hora).toDateString() === new Date().toDateString() ? "blink-red" : ""} style={{ borderBottom: '1px solid #edf2f7' }}>
                     <td style={{ padding: '10px 0' }}>
                       <span style={{ 
@@ -779,13 +956,21 @@ const Dashboard: React.FC = () => {
               </tbody>
             </table>
           )}
+          {renderPagination(alertsPage, alerts.length, setAlertsPage)}
         </div>
 
         {/* 3. Tabla de Eventos (Bitácora) */}
         <div className="custom-scrollbar" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', maxHeight: '500px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h3 style={{ margin: 0, color: '#4a5568' }}>Registro de <br /> Eventos</h3>
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, color: '#4a5568', fontSize: '1.1rem' }}>Registro de Eventos</h3>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <button onClick={() => setEventPeriod('hoy')} style={getFilterButtonStyle(eventPeriod === 'hoy')}>Hoy</button>
+              <button onClick={() => setEventPeriod('semana')} style={getFilterButtonStyle(eventPeriod === 'semana')}>Sem</button>
+              <button onClick={() => setEventPeriod('mes')} style={getFilterButtonStyle(eventPeriod === 'mes')}>Mes</button>
+            </div>
+          </div>
+          <div style={{ marginBottom: '15px' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }}>
               <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#a0aec0', zIndex: 1 }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
               </span>
@@ -798,8 +983,8 @@ const Dashboard: React.FC = () => {
                   padding: '6px 30px 6px 35px',
                   borderRadius: '8px',
                   border: '1px solid #cbd5e0',
-                  fontSize: '0.8rem',
-                  width: '140px',
+                  fontSize: '0.85rem',
+                  width: '100%',
                   boxSizing: 'border-box'
                 }}
               />
@@ -828,7 +1013,7 @@ const Dashboard: React.FC = () => {
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <tbody>
-                {events.map((event: any) => (
+                {paginate(events, eventsPage).map((event: any) => (
                   <tr 
                     key={event.id} 
                     onClick={() => handleEventClick(event)}
@@ -869,6 +1054,7 @@ const Dashboard: React.FC = () => {
               </tbody>
             </table>
           )}
+          {renderPagination(eventsPage, events.length, setEventsPage)}
         </div>
       </div>
 
