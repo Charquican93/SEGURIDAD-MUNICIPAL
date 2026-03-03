@@ -1,7 +1,7 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-const db = mysql.createPool({
+const dbConfig = {
   host: process.env.DB_HOST || process.env.MYSQLHOST,
   user: process.env.DB_USER || process.env.MYSQLUSER,
   password: process.env.DB_PASSWORD || process.env.MYSQLPASSWORD,
@@ -10,7 +10,14 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
-});
+};
+
+// Habilitar SSL solo si NO es localhost (necesario para TiDB/Render, pero opcional para XAMPP)
+if (dbConfig.host !== 'localhost' && dbConfig.host !== '127.0.0.1') {
+  dbConfig.ssl = { rejectUnauthorized: false };
+}
+
+const db = mysql.createPool(dbConfig);
 
 console.log('MySQL Connection Pool configured');
 
