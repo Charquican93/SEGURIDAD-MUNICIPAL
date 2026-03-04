@@ -115,15 +115,33 @@ const Dashboard: React.FC = () => {
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
 
     return data.filter(item => {
-      if (!item[dateField]) return false;
+      // Prioridad: rawDate > campo solicitado > fecha_hora
+      const val = item.rawDate || item[dateField] || item.fecha_hora;
+      if (!val) return false;
       
-      // Manejo robusto de fechas (ISO string o YYYY-MM-DD)
-      let itemDate = new Date(item[dateField]);
-      // Si es solo fecha YYYY-MM-DD (como en eventos), forzamos interpretación local
-      if (dateField === 'date' && typeof item[dateField] === 'string' && item[dateField].length === 10) {
-         const [y, m, d] = item[dateField].split('-').map(Number);
-         itemDate = new Date(y, m - 1, d);
+      let itemDate = new Date(val);
+
+      // Manejo robusto de fechas si es string y no es ISO estándar
+      if (typeof val === 'string') {
+         // Caso DD/MM/YYYY
+         if (val.includes('/') && val.length <= 10) {
+             const [d, m, y] = val.split('/').map(Number);
+             if (!isNaN(d) && !isNaN(m) && !isNaN(y)) itemDate = new Date(y, m - 1, d);
+         }
+         // Caso YYYY-MM-DD o DD-MM-YYYY
+         else if (val.includes('-') && val.length === 10) {
+             const parts = val.split('-');
+             if (parts[0].length === 4) { // YYYY-MM-DD
+                 const [y, m, d] = parts.map(Number);
+                 itemDate = new Date(y, m - 1, d);
+             } else { // DD-MM-YYYY
+                 const [d, m, y] = parts.map(Number);
+                 itemDate = new Date(y, m - 1, d);
+             }
+         }
       }
+
+      if (isNaN(itemDate.getTime())) return false;
 
       if (period === 'hoy') return itemDate >= todayStart && itemDate < todayEnd;
       if (period === 'semana') {
